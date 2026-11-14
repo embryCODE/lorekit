@@ -10,6 +10,7 @@ dependencies = [
     "sqlite-vec",
     "sentence-transformers",
     "platformdirs",
+    "dnd5e-engine>=0.7.0",
 ]
 
 [project.optional-dependencies]

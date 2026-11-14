@@ -42,6 +42,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cachetools"
+version = "8.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/60/ac2d44dbfcca28a35151af27ad9c6236d913a67768b5bb88af90a8c02943/cachetools-8.0.0.tar.gz", hash = "sha256:5ed01bd676800d51f0025605e4fd8ad0891550513e7b0a4c3da478463764e5c3", size = 51146, upload-time = "2026-11-07T07:30:32.369Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/bc/2e35dcb4bfb37a5dd98b8b323158d3103cf263f87164ed03702f6fc5483f/cachetools-8.0.0-py3-none-any.whl", hash = "sha256:5af562e5078f0086771a1e3832a9c3dbf5d336b6e2794a2c12a64680a4c9087d", size = 18610, upload-time = "2026-11-07T07:30:30.831Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.2.25"
 source = { registry = "https://pypi.org/simple" }
@@ -315,12 +324,51 @@ nvtx = [
 ]
 
 [[package]]
+name = "d20"
+version = "1.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cachetools" },
+    { name = "lark-parser" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2e/67/cf32c74c91fe101834e4f3a9f4e27b7be8356a98360f8d8f7950e1fe95e9/d20-1.1.2.tar.gz", hash = "sha256:53bc0ac375deeb84bcbb736ef5b3a72656a265732720fa3e5548dd5b38cb20f5", size = 22939, upload-time = "2021-07-08T18:47:59.082Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/ec/67f5010bd5965099bb983de6922a4b215806859d85bedf505ff655ee3056/d20-1.1.2-py3-none-any.whl", hash = "sha256:1195bfc643aa4bd984bf6d26327491795272bfab8b19ac15108b4352a9de3166", size = 20681, upload-time = "2021-07-08T18:47:58.002Z" },
+]
+
+[[package]]
 name = "distlib"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/96/8e/709914eb2b5749865801041647dc7f4e6d00b549cfe88b65ca192995f07c/distlib-0.4.0.tar.gz", hash = "sha256:feec40075be03a04501a973d81f633735b4b69f98b05450592310c0f401a4e0d", size = 614605, upload-time = "2025-07-17T16:52:00.465Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/33/6b/e0547afaf41bf2c42e52430072fa5658766e3d65bd4b03a563d1b6336f57/distlib-0.4.0-py2.py3-none-any.whl", hash = "sha256:9659f7d87e46584a30b5780e43ac7a2143098441670ff0a49d5f9034c54a6c16", size = 469047, upload-time = "2025-07-17T16:51:58.613Z" },
+]
+
+[[package]]
+name = "dnd5e-engine"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "d20" },
+    { name = "dnd5e-srd-data" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/89/d3/c8ac0567870f1403a5e2c9be91a7d3c944fff4e0371eae0292f2684fcbfc/dnd5e_engine-0.7.0.tar.gz", hash = "sha256:7cf8459a0cd663478682373b2783473977f1f5b181a8168f856000c03f6ba237", size = 847350, upload-time = "2026-10-10T16:53:41.393Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/c5/453ca54dbdd7d4993695a515ba3ab682c7c2e67ff042a848cf3d44190ffa/dnd5e_engine-0.7.0-py3-none-any.whl", hash = "sha256:bd95949c1f1b4c84dea4da7ba4d0518b74f7229c0e421d13143e9db1ecd6de8a", size = 411752, upload-time = "2026-10-10T16:53:39.713Z" },
+]
+
+[[package]]
+name = "dnd5e-srd-data"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fb/74/40afa18c3b1b696f2d5b6658db7cda69791994247985da84e0bf52faefa2/dnd5e_srd_data-0.7.0.tar.gz", hash = "sha256:8ff7c6d67d59cbba04d9c5cadf1fac5b42abf401dd3718ec0750339a670a8a81", size = 1164596, upload-time = "2026-10-10T16:53:08.087Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/18/98/b0a1d871cdd7eb7f71b8f2335608cf8775c8df4d3aa6d7908d1c87f31ad0/dnd5e_srd_data-0.7.0-py3-none-any.whl", hash = "sha256:33e6c74e17aeb9c79b38610fa52a76bba1a81bee8a60039db5eb5a608c166c8b", size = 2781011, upload-time = "2026-10-10T16:53:06.259Z" },
 ]
 
 [[package]]
@@ -515,10 +563,17 @@ wheels = [
 ]
 
 [[package]]
+name = "lark-parser"
+version = "0.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8e/ac/c873c508dc2955da6eb85f0425e991a022cf2a4e53933ac057603d0cf890/lark-parser-0.9.0.tar.gz", hash = "sha256:9e7589365d6b6de1cca40b0eaec31104a3fb96a37a11a9dfd5098e95b50aa6cd", size = 298176, upload-time = "2020-07-01T15:54:50.045Z" }
+
+[[package]]
 name = "lorekit"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dnd5e-engine" },
     { name = "lorekit-cruncher" },
     { name = "mcp", extra = ["cli"] },
     { name = "platformdirs" },
@@ -541,6 +596,7 @@ server = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dnd5e-engine", specifier = ">=0.7.0" },
     { name = "lorekit-cruncher", directory = "cruncher" },
     { name = "mcp", extras = ["cli"] },
     { name = "platformdirs" },
