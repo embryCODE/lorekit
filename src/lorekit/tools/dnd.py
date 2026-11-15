@@ -54,3 +54,102 @@ def dnd_character_level(character_id: int, changes: str) -> str:
         return f"ERROR: {e}"
     finally:
         db.close()
+
+
+def _combat_call(fn, *args, **kwargs) -> str:
+    db = require_db()
+    try:
+        return json.dumps(fn(db, *args, **kwargs), sort_keys=True, default=str)
+    except (LoreKitError, ValueError) as e:
+        return f"ERROR: {e}"
+    except Exception as e:  # ReplayDivergence and engine faults must not crash the MCP server
+        return f"ERROR: {type(e).__name__}: {e}"
+    finally:
+        db.close()
+
+
+@mcp.tool()
+@backend_only
+def dnd_combat_start(
+    session_id: int,
+    monsters: str,
+    grid: str = "12x12",
+    party: str = "[]",
+    cells: str = "{}",
+    seed: int = 0,
+) -> str:
+    """Start a 5e combat on a grid. Positions are cells written "col,row" (0-based).
+
+    monsters: JSON list of {"slug":"goblin-warrior","cell":"6,2","name":"optional","hp":optional,"agent":false}.
+      "agent": true marks an NPC you will drive yourself (e.g. via its NPC agent): monster turns stop
+      when it is that NPC's turn ("awaiting_agent" in the result), and you submit its intent with
+      dnd_combat_act(actor="mon:...", intent=...). Calling dnd_combat_act with no intent on that turn
+      falls back to the built-in monster AI.
+      Slugs are SRD 5.2.1 monster slugs. Without "cell" monsters line up on the far column.
+    grid: "WxH", e.g. "12x12" (one cell is 5 ft).
+    party: JSON list of character ids or names; empty means every living PC in the session.
+    cells: JSON {"<character id or name>": "col,row"} for starting positions (default: left column).
+    seed: optional; a random seed is chosen and recorded when 0. Initiative is rolled for you.
+    Returns the initiative order, positions and whose turn it is.
+    """
+    from lorekit.dnd55e.combat import start
+
+    try:
+        w, h = (int(x) for x in grid.lower().split("x"))
+        return _combat_call(
+            start,
+            session_id,
+            _json(monsters, "monsters"),
+            [w, h],
+            _json(party, "party") or None,
+            _json(cells, "cells"),
+            seed,
+        )
+    except (LoreKitError, ValueError) as e:
+        return f"ERROR: {e}"
+
+
+@mcp.tool()
+@backend_only
+def dnd_combat_status(session_id: int) -> str:
+    """Live state of the active 5e combat: round, current actor, HP, conditions, cells, slots, concentration."""
+    from lorekit.dnd55e.combat import status
+
+    return _combat_call(status, session_id)
+
+
+@mcp.tool()
+@backend_only
+def dnd_combat_act(session_id: int, actor: str = "", intent: str = "", run_monsters: bool = True) -> str:
+    """Resolve one action in the active 5e combat; every number is rolled by the rules engine.
+
+    actor: entity id of the acting PC or agent-driven NPC, e.g. "char:3" (see dnd_combat_status "party").
+    intent: JSON, e.g. {"intent_type":"attack","target_id":"mon:goblin-warrior-1","weapon_id":"longsword"}.
+      intent_type: attack, cast_spell, move, dash, dodge, disengage, hide, help, ready, use_item,
+      use_feature, grapple, shove, stand_up, escape_grapple, drop_concentration, pass.
+      cast_spell takes spell_id, target_id(s), slot_level; move takes target_zone_id "col,row".
+      Reactions (Shield, Counterspell, ...) are pre-armed on the PC's own turn with
+      {"intent_type":"ready","reaction_trigger":"hit_by_attack"|"cast_spell"|"targeted_by_magic_missile", ...}.
+    With no actor/intent, advances one monster turn.
+    run_monsters: after a PC acts, monsters take their turns automatically until it is a PC's turn.
+    Returns "steps" (each with the rolled events, or an "error") plus the new status. Narrate from the events.
+    """
+    from lorekit.dnd55e.combat import act
+
+    try:
+        parsed = _json(intent, "intent") if intent else None
+    except LoreKitError as e:
+        return f"ERROR: {e}"
+    return _combat_call(act, session_id, actor or None, parsed, run_monsters)
+
+
+@mcp.tool()
+@backend_only
+def dnd_combat_end(session_id: int) -> str:
+    """End the active 5e combat and write each PC's final HP, temp HP and spell slots to their sheet.
+
+    Characters who died are marked dead. Rests (dnd_rest) restore slots and Hit Dice afterwards.
+    """
+    from lorekit.dnd55e.combat import end
+
+    return _combat_call(end, session_id)

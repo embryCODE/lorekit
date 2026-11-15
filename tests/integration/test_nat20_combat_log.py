@@ -111,7 +111,7 @@ def test_end_clears_log(make_session):
     nat20.start(db, sid, START)
     for _ in range(3):
         _step(db, sid)
-    outcome = nat20.end(db, sid)
+    outcome = nat20.end(db, sid)["outcome"]
     assert "residual_hp" in outcome
     assert nat20._load(db, sid) is None
 

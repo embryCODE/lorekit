@@ -188,7 +188,7 @@ def _live(db, session_id):
     return handle, rec
 
 
-def _validate(handle, actor: str | None, intent: dict | None) -> dict:
+def _validate(handle, actor: str | None, intent: dict | None, agent_ids: frozenset = frozenset()) -> dict:
     """Reject calls that can't be right before they touch Nat20 or the log."""
     v = get_live(handle)
     if v.ended:
@@ -198,8 +198,10 @@ def _validate(handle, actor: str | None, intent: dict | None) -> dict:
         if current in v.party_ids:
             raise ValueError(f"it is {current}'s turn; submit an intent for them")
         return {"op": "monster"}
-    if actor not in v.party_ids:
-        raise ValueError(f"unknown party member {actor!r}; party is {sorted(v.party_ids)}")
+    if actor not in v.party_ids and actor not in agent_ids:
+        raise ValueError(
+            f"{actor!r} cannot be given intents; party is {sorted(v.party_ids)}, agent-driven: {sorted(agent_ids)}"
+        )
     try:
         parsed = PlayerIntent(**intent)
     except Exception as exc:  # pydantic ValidationError
@@ -234,7 +236,8 @@ def act(db, session_id: int, actor: str | None = None, intent: dict | None = Non
     rejected it after we sent it, and the call is logged so replay stays in step.
     """
     handle, rec = _live(db, session_id)
-    entry = _validate(handle, actor, intent)
+    agent_ids = frozenset(m["entity_id"] for m in rec["start"]["encounter"] if m.get("agent_driven"))
+    entry = _validate(handle, actor, intent, agent_ids)
     events, error = _run(_apply(handle, entry))
     if error:
         entry["error"] = error
@@ -251,6 +254,7 @@ def status(db, session_id: int) -> dict:
     return {
         "round": v.round_number,
         "current": v.initiative[v.current_turn_index].entity_id,
+        "order": [c.entity_id for c in v.initiative],
         "hp": dict(v.tracked_hp),
         "temp_hp": {k: n for k, n in v.tracked_temp_hp.items() if n},
         "dead": sorted(v.dead_ids),
@@ -265,13 +269,25 @@ def status(db, session_id: int) -> dict:
 
 
 def end(db, session_id: int) -> dict:
-    """Close the combat and clear the log. Returns the outcome (write-back is the caller's job)."""
+    """Close the combat and clear the log.
+
+    Returns {"outcome": ..., "final": ...}; ``final`` is the end-of-combat state of every
+    combatant, which the caller writes back to character rows.
+    """
     handle, rec = _live(db, session_id)
     result = _run(end_combat(handle))
-    outcome = result.outcome.model_dump(mode="json")
+    v = get_live(handle)
+    final = {
+        "hp": dict(v.tracked_hp),
+        "temp_hp": dict(v.tracked_temp_hp),
+        "dead": sorted(v.dead_ids),
+        "slots": {k: {str(lv): n for lv, n in d.items()} for k, d in v.spell_slots_by_entity.items()},
+        "pact_slots": {k: {str(lv): n for lv, n in d.items()} for k, d in v.pact_slots_by_entity.items()},
+        "rounds": v.round_number,
+    }
     _store(db, session_id, None)
     _CACHE.pop(session_id, None)
-    return outcome
+    return {"outcome": result.outcome.model_dump(mode="json"), "final": final, "start": rec["start"]}
 
 
 def active_sessions(db) -> list[tuple[int, str, int]]:
