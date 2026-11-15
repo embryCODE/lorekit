@@ -110,7 +110,21 @@ def build_start(
                 "zone_id": _cell(m.get("cell") or f"{w - 1},{min(h - 1, i * 2)}", f"monster {i}"),
             }
         )
+    _check_cells(members, encounter, w, h)
     return {"seed": seed, "grid": [w, h], "party": members, "encounter": encounter}
+
+
+def _check_cells(members: list[dict], encounter: list[dict], w: int, h: int) -> None:
+    """Every combatant needs its own on-grid starting cell."""
+    seen: dict[tuple[int, int], str] = {}
+    placed = [(p["instance"]["name"], p["instance"]["zone_id"]) for p in members]
+    placed += [(m["name"], m["zone_id"]) for m in encounter]
+    for name, (col, row) in placed:
+        if not (0 <= col < w and 0 <= row < h):
+            raise LoreKitError(f"{name}: cell {col},{row} is off the {w}x{h} grid")
+        if (col, row) in seen:
+            raise LoreKitError(f"{name} and {seen[(col, row)]} can't start in the same cell {col},{row}; pick another")
+        seen[(col, row)] = name
 
 
 def start(db, session_id: int, monsters, grid, party=None, cells=None, seed: int = 0) -> dict:

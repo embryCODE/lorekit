@@ -1057,9 +1057,9 @@ class TestNpcModelFallback:
         finally:
             db.close()
 
-    def test_no_model_anywhere_raises(self, make_session, make_character):
-        """NPC with no model attr and no session default raises error."""
-        from lorekit.db import LoreKitError, require_db
+    def test_no_model_anywhere_uses_sonnet_default(self, make_session, make_character):
+        """NPC with no model attr and no session default falls back to the Sonnet default."""
+        from lorekit.db import require_db
         from lorekit.tools.npc import _build_npc_prompt
 
         db = require_db()
@@ -1067,7 +1067,7 @@ class TestNpcModelFallback:
             sid = make_session()
             cid = make_character(sid, name="Goblin", char_type="npc")
 
-            with pytest.raises(LoreKitError, match="No model configured"):
-                _build_npc_prompt(db, cid, sid, "Hello")
+            _, model, _ = _build_npc_prompt(db, cid, sid, "Hello")
+            assert model == "claude-sonnet-5-5"
         finally:
             db.close()

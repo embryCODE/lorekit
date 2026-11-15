@@ -47,9 +47,13 @@ def query_npc_reaction(
         "SELECT value FROM character_attributes WHERE character_id = ? AND category = 'system' AND key = 'model'",
         (reactor_id,),
     ).fetchone()
-    if not model_row:
-        raise LoreKitError(f"No model configured for character {reactor_id} — set category='system', key='model'")
-    model = model_row[0]
+    if model_row:
+        model = model_row[0]
+    else:
+        from lorekit._mcp_app import get_default_model
+        from lorekit.config import DEFAULT_MODEL
+
+        model = get_default_model() or DEFAULT_MODEL
 
     # Build a minimal prompt
     system_prompt = f"You are {reactor_name} in combat. Quick decision — respond with only YES or NO."

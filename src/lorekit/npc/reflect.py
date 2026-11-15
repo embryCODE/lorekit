@@ -309,13 +309,14 @@ Omit sections if empty (e.g., no identity updates needed). Source numbers refere
 def _call_llm(prompt):
     """Call LLM via provider (if configured) or claude -p subprocess."""
     from lorekit._mcp_app import get_default_model, get_provider_name
+    from lorekit.config import DEFAULT_MODEL
 
     provider_name = get_provider_name()
     if provider_name:
         from lorekit.providers import load_provider
 
         provider = load_provider(provider_name)
-        model = get_default_model() or "sonnet"
+        model = get_default_model() or DEFAULT_MODEL
         return provider.run_ephemeral_sync("", model, prompt)
 
     from lorekit.rules import project_root as _pr
@@ -335,7 +336,7 @@ def _call_llm(prompt):
         "",
         "--disable-slash-commands",
         "--model",
-        "sonnet",
+        DEFAULT_MODEL,
     ]
     cmd.append(prompt)
 

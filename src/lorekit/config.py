@@ -9,12 +9,16 @@ from pathlib import Path
 from platformdirs import user_config_dir
 
 
+DEFAULT_PROVIDER = "claude"
+DEFAULT_MODEL = "claude-sonnet-5-5"
+
+
 @dataclass
 class LoreKitConfig:
     """Infrastructure configuration (provider, model, server port, campaign dir)."""
 
-    provider: str | None = None
-    model: str | None = None
+    provider: str | None = DEFAULT_PROVIDER
+    model: str | None = DEFAULT_MODEL
     port: int = 8765
     campaign_dir: Path | None = None
     debug: bool = False
@@ -42,8 +46,8 @@ def load_config(path: Path | None = None) -> LoreKitConfig:
     campaign = raw.get("campaign", {})
     campaign_dir_str = campaign.get("dir")
     return LoreKitConfig(
-        provider=agent.get("provider"),
-        model=agent.get("model"),
+        provider=agent.get("provider") or DEFAULT_PROVIDER,
+        model=agent.get("model") or DEFAULT_MODEL,
         port=server.get("port", 8765),
         campaign_dir=Path(campaign_dir_str) if campaign_dir_str else default_campaign_dir(),
         debug=raw.get("debug", False),

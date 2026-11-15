@@ -98,13 +98,10 @@ def _build_npc_prompt(db, npc_id: int, session_id: int, gm_message: str = "") ->
         if meta_row:
             model = meta_row[0] if isinstance(meta_row, (tuple, list)) else meta_row["value"]
         else:
-            from lorekit.db import LoreKitError
+            from lorekit._mcp_app import get_default_model
+            from lorekit.config import DEFAULT_MODEL
 
-            raise LoreKitError(
-                f"No model configured for NPC '{npc_name}' (id {npc_id}) — "
-                "set category='system', key='model' in character_attributes "
-                "or set session meta 'npc_model'"
-            )
+            model = get_default_model() or DEFAULT_MODEL
 
     # Inventory
     items = db.execute(

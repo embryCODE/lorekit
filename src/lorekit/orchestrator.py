@@ -22,6 +22,8 @@ async def _transform_events(
 ) -> AsyncIterator[GameEvent]:
     """Transform raw StreamChunks into curated GameEvents."""
     text_parts: list[str] = []
+    saved_narrations: list[str] = []
+    result_text = ""
     got_any = False
 
     async for chunk in chunks:
@@ -30,6 +32,10 @@ async def _transform_events(
             text_parts.append(chunk.content)
             if verbose:
                 yield GameEvent(type="narration_delta", content=chunk.content)
+        elif chunk.type == "saved_narration":
+            saved_narrations.append(chunk.content)
+        elif chunk.type == "result_text":
+            result_text = chunk.content
         elif chunk.type == "tool_use":
             if verbose:
                 yield GameEvent(type="tool_activity", content=chunk.content)
@@ -42,11 +48,19 @@ async def _transform_events(
         elif chunk.type == "system":
             yield GameEvent(type="system", content=chunk.content)
 
-    # Emit accumulated narration at the end
-    if text_parts:
-        yield GameEvent(type="narration", content="".join(text_parts))
+    # Emit accumulated narration at the end. Narration the GM only passed to
+    # turn_save (never as visible text) is shown too, so a reply is never lost.
+    shown = "".join(text_parts)
+    squashed = " ".join(shown.split())
+    missing = [n for n in saved_narrations if " ".join(n.split())[:80] not in squashed]
+    if not shown and not missing and result_text:
+        shown = result_text
+    if missing or shown:
+        yield GameEvent(type="narration", content="\n\n".join([*missing, shown] if shown else missing))
     elif not got_any:
         yield GameEvent(type="error", content="GM agent process terminated unexpectedly")
+    else:
+        yield GameEvent(type="error", content="GM finished its turn without producing a reply.")
 
 
 class GameSession:

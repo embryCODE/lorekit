@@ -27,12 +27,31 @@ def parse_jsonl_line(line: str) -> StreamChunk | None:
         if msg.get("is_error"):
             errors = "; ".join(msg.get("errors", [])) or msg.get("result", "Unknown error")
             return StreamChunk(type="error", content=errors)
+        if msg.get("result"):
+            return StreamChunk(type="result_text", content=msg["result"])
+        return None
+
+    if msg.get("type") == "assistant":
+        saved = _saved_narration(msg)
+        if saved:
+            return StreamChunk(type="saved_narration", content=saved)
         return None
 
     if msg.get("type") == "system" and msg.get("subtype") == "init":
         return StreamChunk(type="system", content=msg.get("session_id", ""))
 
     return _parse_tool_result_message(msg)
+
+
+def _saved_narration(msg: dict) -> str:
+    """Narration passed to a turn_save tool call in a complete assistant message."""
+    for block in (msg.get("message") or {}).get("content") or []:
+        if block.get("type") != "tool_use" or not block.get("name", "").endswith("turn_save"):
+            continue
+        narration = (block.get("input") or {}).get("narration")
+        if isinstance(narration, str) and narration.strip():
+            return narration
+    return ""
 
 
 def _parse_stream_event(evt: dict) -> StreamChunk | None:

@@ -160,6 +160,7 @@ export function App() {
       setNpcToolCalls([]);
 
       const textParts: string[] = [];
+      let gotNarration = false;
 
       try {
         for await (const event of sendMessage(text)) {
@@ -189,6 +190,7 @@ export function App() {
             }
           } else if (event.type === "narration") {
             // Final accumulated text — use this as the definitive message
+            gotNarration = true;
             setMessages((prev) => [...prev, chatMsg("gm", event.content)]);
           } else if (event.type === "error") {
             setMessages((prev) => [
@@ -204,7 +206,7 @@ export function App() {
         }
 
         // If no narration event came, use accumulated deltas
-        if (textParts.length > 0) {
+        if (!gotNarration && textParts.length > 0) {
           const fullText = textParts.join("");
           // Check if we already added this as a narration event
           setMessages((prev) => {

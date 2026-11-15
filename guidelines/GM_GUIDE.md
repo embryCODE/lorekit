@@ -197,6 +197,10 @@ Save character state changes immediately -- damage, items, level ups. Use
 stored text is the **exact text you displayed to the player** -- identical,
 word for word. The purpose is to replay the scene verbatim on resume.
 
+Always write the narration out as your visible reply, in addition to passing it
+to `turn_save`. Never mention saving to the player ("(Saved.)", "I saved this
+scene"); players should only ever see the story and their choices.
+
 ### Reverting a turn
 
 Use `turn_revert` to undo the last turn. This restores **all** game state to

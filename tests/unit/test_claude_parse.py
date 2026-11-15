@@ -2,6 +2,7 @@
 
 import json
 
+from lorekit.providers.base import StreamChunk
 from lorekit.providers.claude.parse import collect_text, is_result_line, parse_jsonl_line
 
 # -- parse_jsonl_line --
@@ -50,7 +51,8 @@ def test_parse_tool_use_start():
 
 def test_parse_result_success():
     line = json.dumps({"type": "result", "is_error": False, "result": "done"})
-    assert parse_jsonl_line(line) is None
+    assert parse_jsonl_line(line) == StreamChunk(type="result_text", content="done")
+    assert parse_jsonl_line(json.dumps({"type": "result", "is_error": False, "result": ""})) is None
 
 
 def test_parse_result_error():
