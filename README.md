@@ -42,7 +42,7 @@ source .venv/bin/activate
 pip install -e cruncher/ -e .
 ```
 
-Configuration lives in `~/.config/lorekit/config.toml`. On first run, lorekit
+Configuration lives in `config.toml` in the platform config dir (`~/.config/lorekit/` on Linux, `~/Library/Application Support/lorekit/` on macOS). On first run, lorekit
 creates the database automatically.
 
 ## Development
@@ -67,7 +67,7 @@ pytest tests/integration/    # cross-module interaction tests
 
 ## Playing
 
-Before playing, create `~/.config/lorekit/config.toml`:
+Before playing, create `config.toml` (see Setup for its location):
 
 ```toml
 [agent]
