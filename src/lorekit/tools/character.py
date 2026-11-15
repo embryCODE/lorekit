@@ -33,11 +33,26 @@ def character_view(character_id: int | str) -> str:
     db = require_db()
     try:
         cid = _resolve_character(db, character_id)
-        return view(db, cid)
+        out = view(db, cid)
+        return out + _combat_note(db, cid)
     except LoreKitError as e:
         return f"ERROR: {e}"
     finally:
         db.close()
+
+
+def _combat_note(db, character_id: int) -> str:
+    """During a 5e combat the stored state is stale by design; point to the live view."""
+    from lorekit.backends.nat20 import META_KEY
+    from lorekit.queries import get_character_session_id
+
+    sid = get_character_session_id(db, character_id)
+    if sid is None:
+        return ""
+    row = db.execute("SELECT 1 FROM session_meta WHERE session_id = ? AND key = ?", (sid, META_KEY)).fetchone()
+    if not row:
+        return ""
+    return "\nNOTE: a 5e combat is active. HP, slots and conditions above are pre-combat; use dnd_combat_status for live values."
 
 
 @mcp.tool()

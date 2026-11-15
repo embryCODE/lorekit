@@ -104,12 +104,21 @@ def _digest(handle) -> str:
     return hashlib.sha256(json.dumps(summary, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
+def build_spec(build: dict):
+    """Turn a stored (JSON) build dict into Nat20's CharacterBuildSpec."""
+    b = dict(build)
+    for key in ("equipment", "selected_choices", "attuned_items"):
+        if key in b and b[key] is not None:
+            b[key] = tuple(b[key])
+    return make_build_spec(**b)
+
+
 async def _open(start: dict):
     loader = BundledAssetLoader()
     party = []
     for p in start["party"]:
         inst = dict(p["instance"], zone_id=cell_id(*p["instance"]["zone_id"]))
-        party.append(build_party_member(make_build_spec(**p["build"]), CombatInstance(**inst), loader=loader))
+        party.append(build_party_member(build_spec(p["build"]), CombatInstance(**inst), loader=loader))
     encounter = [
         EncounterMemberSpec(
             entity_id=m["entity_id"],

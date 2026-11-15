@@ -2,6 +2,7 @@
 
 from lorekit.tools import (
     character,
+    dnd,
     encounter,
     narrative,
     npc,
