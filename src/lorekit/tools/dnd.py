@@ -21,7 +21,8 @@ def dnd_character_create(session_id: int, name: str, build: str, type: str = "pc
 
     build: JSON object, e.g. {"species_slug":"human","class_slug":"fighter","level":3,
       "ability_scores":{"str":16,"dex":12,"con":14,"int":10,"wis":12,"cha":8}}.
-      Optional: subclass_slug (from level 3), background_slug, equipment, selected_choices,
+      Optional: subclass_slug (from level 3), background_slug, equipment (list of SRD item slugs,
+      e.g. ["chain-mail","longsword","shield"]; without armor AC is 10 + Dex), selected_choices,
       classes (multiclass, e.g. {"fighter":2,"wizard":1} instead of class_slug+level).
     Returns the character id plus derived HP, AC, speed, spell slots and Hit Dice.
     """

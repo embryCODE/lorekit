@@ -125,6 +125,7 @@ async def _open(start: dict):
             entity_type="Monster",
             name=m.get("name", m["entity_id"]),
             monster_template_slug=m["slug"],
+            attack_bonus=m.get("attack_bonus", 0),
             initiative=m["init"],
             hp_current=m["hp"],
             hp_max=m["hp"],

@@ -828,7 +828,9 @@ never invent a roll or a result, and narrate only what the returned events say.
 Create each PC with `dnd_character_create(session_id, name, build)`. `build` is
 JSON: `species_slug` (e.g. `human`, `elf-high`, `dwarf`), `class_slug` (e.g.
 `fighter`, `wizard`), `level`, `ability_scores` (`str dex con int wis cha`),
-and optionally `subclass_slug` (from level 3), `background_slug`, `equipment`,
+and optionally `subclass_slug` (from level 3), `background_slug`, `equipment`
+(a list of SRD item slugs, e.g. `["chain-mail","longsword","shield"]`; **without
+armor a character has AC 10 + Dex**, so ask the player and include their gear),
 `classes` (multiclass, e.g. `{"fighter":2,"wizard":1}` instead of
 `class_slug`+`level`). Roll the ability scores with `roll_dice` (4d6kh3 six
 times) or use the standard array 15,14,13,12,10,8, and let the player assign
@@ -858,9 +860,11 @@ not zones. Decide the grid and where everyone stands, then:
    `target_id` or `target_ids`, `slot_level`), `move` (`target_zone_id` as a
    cell), `dash`, `dodge`, `disengage`, `hide`, `help`, `use_item`,
    `use_feature`, `grapple`, `shove`, `stand_up`, `escape_grapple`,
-   `drop_concentration`, `pass`. A turn ends when the engine says so; if the
-   result shows it is still the same character's turn, they can act again
-   (for example move, then attack).
+   `drop_concentration`, `pass`. **Do movement and bonus actions first.** The
+   turn ends automatically as soon as the Action is spent (an attack, a spell,
+   `dodge`, `dash`, ...), so a PC who wants to move, use Second Wind or another
+   bonus action, and then attack must do them in that order, each as its own
+   call. Moving does not end the turn; the result shows whose turn it is now.
 3. After a PC's action, monsters take their turns automatically until the next
    PC is up. The result lists every step with the rolled events: narrate them
    in order, including monster attacks, damage and any reactions.

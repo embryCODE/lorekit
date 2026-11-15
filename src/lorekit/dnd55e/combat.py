@@ -94,6 +94,10 @@ def build_start(
         letter = string.ascii_uppercase[(n - 1) % 26]
         dex = (tmpl.ability_scores.dex - 10) // 2
         hp = int(m.get("hp") or tmpl.hp)
+        # dnd5e-engine 0.7.0 gives monster template attacks a +0 to hit; use the stat-block
+        # convention (best of Str/Dex modifier + proficiency bonus) until that is fixed upstream.
+        best = max(tmpl.ability_scores.str, tmpl.ability_scores.dex)
+        attack_bonus = m.get("attack_bonus", (best - 10) // 2 + int(tmpl.proficiency_bonus))
         encounter.append(
             {
                 "entity_id": f"mon:{slug}-{n}",
@@ -101,6 +105,7 @@ def build_start(
                 "slug": slug,
                 "hp": hp,
                 "init": init_rng.randint(1, 20) + dex,
+                "attack_bonus": attack_bonus,
                 "agent_driven": bool(m.get("agent")),
                 "zone_id": _cell(m.get("cell") or f"{w - 1},{min(h - 1, i * 2)}", f"monster {i}"),
             }

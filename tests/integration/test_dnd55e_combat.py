@@ -212,3 +212,11 @@ def test_agent_driven_npc_pauses_auto_turns_and_accepts_intents(make_session):
     # a non-agent monster cannot be given intents
     bad = dnd_combat_act(session_id=sid, actor="mon:goblin-warrior-2", intent=json.dumps({"intent_type": "dodge"}))
     assert bad.startswith("ERROR")
+
+
+def test_monsters_get_a_stat_block_attack_bonus(make_session):
+    sid = make_session(system="dnd55e")
+    ids = _party(sid)
+    _start(sid, ids, monsters=[{"slug": "goblin-warrior", "cell": "1,0"}])
+    gob = nat20._load(get_db(), sid)["start"]["encounter"][0]
+    assert gob["attack_bonus"] == 4  # Dex +2, proficiency +2
