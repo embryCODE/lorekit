@@ -74,8 +74,10 @@ player's answer before moving on.
 2. **Ask the player to choose a world setting.**
 
 3. **Ask the player to choose a rule system.**
-   Every session requires a **system pack**. Available packs: `mm3e` (d20 Hero
-   SRD 3e), `pf2e` (Pathfinder 2e), `basic` (generic d20). If the player
+   Every session requires a system. Available: `dnd55e` (D&D 5.5e, 2024 rules,
+   SRD 5.2.1 — resolved by the Nat20 engine; **read Section 12 before using
+   it**), and the cruncher packs `mm3e` (d20 Hero SRD 3e), `pf2e` (Pathfinder
+   2e), `basic` (generic d20). If the player
    picks a system that has no pack, tell them it is not supported and offer
    `basic` as an alternative.
 
@@ -94,8 +96,10 @@ player's answer before moving on.
    language (in meta), story size, premise, acts, regions, and narrative_time.
    Setting and system are locked for the entire session.
 
-   Call `system_info` to discover the pack's attribute names, action names,
-   and build structure **before** creating characters.
+   For a cruncher pack, call `system_info` to discover the pack's attribute
+   names, action names, and build structure **before** creating characters.
+   For `dnd55e`, skip `system_info` and follow Section 12 for everything
+   mechanical (characters, checks, combat, rests).
 
 7. **Ask the player for a character name.**
 
@@ -807,3 +811,89 @@ not easily reversible.
 
 Use `export_dump` to dump all session data for narrative rewriting. The
 rewriting guidelines are in `guidelines/REWRITING_GUIDE.md`.
+
+---
+
+## 12. D&D 5.5e sessions (`dnd55e`)
+
+A `dnd55e` session is resolved by the Nat20 rules engine, not by a cruncher
+pack. **Every `encounter_*` tool, `rules_*` tool, `character_build` and `rest`
+refuses these sessions.** Use the `dnd_*` tools below instead. Everything else
+(sessions, story, regions, journal, time, NPC agents, `turn_save`, saves and
+reverts) works exactly as in the rest of this guide. The engine rolls every die:
+never invent a roll or a result, and narrate only what the returned events say.
+
+### Characters
+
+Create each PC with `dnd_character_create(session_id, name, build)`. `build` is
+JSON: `species_slug` (e.g. `human`, `elf-high`, `dwarf`), `class_slug` (e.g.
+`fighter`, `wizard`), `level`, `ability_scores` (`str dex con int wis cha`),
+and optionally `subclass_slug` (from level 3), `background_slug`, `equipment`,
+`classes` (multiclass, e.g. `{"fighter":2,"wizard":1}` instead of
+`class_slug`+`level`). Roll the ability scores with `roll_dice` (4d6kh3 six
+times) or use the standard array 15,14,13,12,10,8, and let the player assign
+them. Show the player the derived HP, AC, speed, spell slots and Hit Dice that
+come back. Invalid builds return an error and create nothing. Level up with
+`dnd_character_level(character_id, {"level": N})`.
+
+### Checks and saves outside combat
+
+`dnd_check(character_id, kind, name, dc, advantage, disadvantage)` where `kind`
+is `skill` (`stealth`), `ability` (`strength`) or `saving_throw` (`wisdom`).
+You choose the DC; set `advantage`/`disadvantage` only when the fiction
+justifies it. State the roll to the player (d20, modifier, total, DC, result).
+
+### Combat
+
+Positions are **grid cells** written `"col,row"` (0-based, one cell = 5 ft),
+not zones. Decide the grid and where everyone stands, then:
+
+1. `dnd_combat_start(session_id, monsters, grid, cells)` — `monsters` is JSON
+   `[{"slug":"goblin-warrior","cell":"6,2"}]` using SRD monster slugs;
+   `cells` places the PCs. Initiative is rolled for you. Describe the scene
+   from the returned positions and order.
+2. On a PC's turn, ask the player what they do and translate it into one
+   intent: `dnd_combat_act(session_id, actor="char:<id>", intent=...)`.
+   Intent types: `attack` (`target_id`, `weapon_id`), `cast_spell` (`spell_id`,
+   `target_id` or `target_ids`, `slot_level`), `move` (`target_zone_id` as a
+   cell), `dash`, `dodge`, `disengage`, `hide`, `help`, `use_item`,
+   `use_feature`, `grapple`, `shove`, `stand_up`, `escape_grapple`,
+   `drop_concentration`, `pass`. A turn ends when the engine says so; if the
+   result shows it is still the same character's turn, they can act again
+   (for example move, then attack).
+3. After a PC's action, monsters take their turns automatically until the next
+   PC is up. The result lists every step with the rolled events: narrate them
+   in order, including monster attacks, damage and any reactions.
+4. **Reactions are pre-armed.** The engine never pauses to ask. To let a PC use
+   Shield, Counterspell or the like, the player must declare it on their own
+   turn: `{"intent_type":"ready","reaction_trigger":"hit_by_attack"|"cast_spell"|
+   "targeted_by_magic_missile","spell_id":"shield","slot_level":1}`. Ask
+   spellcasters at the start of their turn whether they want to hold a
+   reaction. Opportunity attacks happen automatically when someone leaves reach.
+5. `dnd_combat_status(session_id)` shows HP, conditions, cells, slots,
+   concentration and whose turn it is — check it instead of guessing.
+6. **Important NPCs:** mark a monster `"agent": true` at combat start to play it
+   through its NPC agent. When the result reports `awaiting_agent`, get that
+   NPC's decision with the normal NPC tools, translate it to an intent and
+   submit it with `dnd_combat_act(actor="mon:...")`. Calling it with no intent
+   lets the built-in monster AI play the turn instead.
+7. When one side is down or flees, call `dnd_combat_end(session_id)`. It writes
+   each PC's final HP, temp HP and spell slots to their sheet and marks the
+   dead. Then `turn_save` as usual.
+
+If `dnd_combat_act` returns an `error` on a step, **nothing was narrated by the
+engine for that step** — tell the player and let them choose, per the
+Mechanical Integrity rules. A `ReplayDivergence` error means the stored combat
+no longer matches the engine: stop, tell the player, and offer `turn_revert`
+or `save_load` to a point before the fight.
+
+### Rests
+
+`dnd_rest(character_id, "short", hit_dice=N)` spends Hit Dice to heal;
+`dnd_rest(character_id, "long")` restores HP, spell slots and half the Hit
+Dice, and reduces exhaustion by 1. Call it once per resting character.
+
+### Spoken narration vs. numbers
+
+Keep the mechanics in short, plain lines the player can skim (what was rolled
+and the outcome) and put the drama in your narration.

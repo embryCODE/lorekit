@@ -118,7 +118,37 @@ search (does not block the HTTP server or clients).
 | `rules.py` | System info, checks, resolution, modifiers |
 | `npc.py` | NPC interaction, memory, reflection, combat turns |
 | `utility.py` | Dice, recall search, export, rest |
+| `dnd.py` | 5e (`dnd55e`) characters, combat, checks and rests, resolved by Nat20 |
 | `_helpers.py` | Shared helpers: character resolution, DB wrappers, system path resolution |
+
+### Rules Backends (`backends/`)
+
+A session's `system_type` selects who resolves its rules. Systems with an entry
+in `backends.BACKENDS` (today `dnd55e` → Nat20) use external-engine tools
+(`dnd_*`); all others use cruncher and the pack-driven tools. The
+`@cruncher_only` / `@backend_only` decorators guard each tool: a tool called on
+the wrong kind of session returns an error naming the right tool family and
+changes nothing. The registry knows nothing about d20 rolls or grids, so a
+dice-pool engine can register beside Nat20.
+
+**Nat20 combat log (`backends/nat20.py`).** Nat20 keeps live combats in
+process memory with no save/restore, so LoreKit stores each combat as an
+append-only log in `session_meta["nat20_combat"]`: engine version, start spec
+(party builds, monsters, grid, seed), ordered calls, and a state digest after
+every call. The live Nat20 combat is a cache, rebuilt by deterministic replay
+when it is missing (restart) or out of step with the log (`turn_revert`,
+`save_load`, branching). Checkpoints already snapshot `session_meta`, so they
+cover combat with no combat-specific code. Replay checks the digest after every
+call and raises `ReplayDivergence` on a mismatch or an engine-version change.
+Calls Nat20 rejects after LoreKit validated them are logged with their error so
+replay stays in step. Upgrade `dnd5e-engine` only when no combat is active
+(`python -m lorekit.backends.nat20` lists active combats).
+
+**Character state (`dnd55e/character.py`).** A 5e character's build spec and
+current state (HP, slots, Hit Dice, exhaustion) live in `character_attributes`
+under category `dnd55e`. State crosses into Nat20 once at `dnd_combat_start`
+and comes back once at `dnd_combat_end`; during combat the rows are stale by
+design and `dnd_combat_status` is authoritative.
 
 ### Combat Modules (`combat/`)
 

@@ -8,3 +8,10 @@ subdirectory for details.
 This project is not affiliated with, endorsed by, or associated with
 Paizo Inc., Green Ronin Publishing, or any other game publisher.
 System names are used for identification purposes only.
+
+D&D 5.5e support uses the Nat20 rules engine (dnd5e-engine, MIT) and its SRD
+data (dnd5e-srd-data, CC-BY-4.0). Game data comes from the System Reference
+Document 5.2.1 ("SRD 5.2.1") by Wizards of the Coast LLC, available at
+https://www.dndbeyond.com/srd and licensed under the Creative Commons
+Attribution 4.0 International License
+(https://creativecommons.org/licenses/by/4.0/legalcode).
