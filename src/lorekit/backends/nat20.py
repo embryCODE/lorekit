@@ -1,4 +1,4 @@
-"""SPIKE: Nat20 as LoreKit's D&D 5.5e combat backend, persisted as an intent log.
+"""Nat20 (dnd5e-engine) as LoreKit's D&D 5.5e combat backend, persisted as an intent log.
 
 One source of truth: LoreKit stores a combat as (start spec, seed, ordered
 calls) in session_meta. Nat20's in-memory combat is a disposable cache, rebuilt
@@ -81,18 +81,27 @@ def _store(db, session_id, rec: dict | None) -> None:
 
 
 def _digest(handle) -> str:
+    """Hash everything that decides future outcomes or that the GM relies on."""
     v = get_live(handle)
     summary = {
         "round": v.round_number,
         "turn": v.current_turn_index,
         "ended": v.ended,
         "hp": dict(sorted(v.tracked_hp.items())),
+        "temp_hp": dict(sorted(v.tracked_temp_hp.items())),
         "dead": sorted(v.dead_ids),
         "conditions": {k: sorted(s) for k, s in sorted(v.active_conditions.items())},
         "zones": dict(sorted(v.actor_zone.items())),
-        "slots": {k: {str(l): n for l, n in sorted(d.items())} for k, d in sorted(v.spell_slots_by_entity.items())},
+        "slots": {k: {str(lv): n for lv, n in sorted(d.items())} for k, d in sorted(v.spell_slots_by_entity.items())},
+        "pact": {k: {str(lv): n for lv, n in sorted(d.items())} for k, d in sorted(v.pact_slots_by_entity.items())},
+        "concentration": {k: [list(t) for t in c] for k, c in sorted(v.concentration_chain.items())},
+        "attacks_remaining": v.turn.attacks_remaining,
+        "legendary_actions": dict(sorted(v.legendary_actions_by_entity.items())),
+        "legendary_resistances": dict(sorted(v.legendary_resistances_by_entity.items())),
+        "monster_uses": repr(sorted(v.monster_action_uses_by_entity.items())),
+        "counters": repr(sorted(v.custom_counters_by_entity.items())),
     }
-    return hashlib.sha256(json.dumps(summary, sort_keys=True).encode()).hexdigest()[:16]
+    return hashlib.sha256(json.dumps(summary, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
 async def _open(start: dict):
@@ -125,12 +134,21 @@ async def _open(start: dict):
     return res.handle
 
 
-async def _apply(handle, entry: dict) -> list[dict]:
-    if entry["op"] == "monster":
-        await advance_monster_turn(handle)
-    else:
-        await submit_player_intent(handle, entry["actor"], PlayerIntent.model_validate(entry["intent"]))
-    return [e.model_dump(mode="json") for e in drain_pending_events(handle)]
+async def _apply(handle, entry: dict) -> tuple[list[dict], str | None]:
+    """Apply one logged call. Returns (events, error). An engine error is data, not a crash.
+
+    A call Nat20 rejects may already have consumed RNG or emitted events, so it
+    stays in the log and replay must reproduce the same error.
+    """
+    error = None
+    try:
+        if entry["op"] == "monster":
+            await advance_monster_turn(handle)
+        else:
+            await submit_player_intent(handle, entry["actor"], PlayerIntent.model_validate(entry["intent"]))
+    except Exception as exc:  # noqa: BLE001 - engine errors are recorded, not raised
+        error = f"{type(exc).__name__}: {exc}"
+    return [e.model_dump(mode="json") for e in drain_pending_events(handle)], error
 
 
 def _live(db, session_id):
@@ -151,8 +169,8 @@ def _live(db, session_id):
         if _digest(handle) != rec["start_digest"]:
             raise ReplayDivergence("start state differs")
         for i, entry in enumerate(rec["log"]):
-            await _apply(handle, entry)
-            if _digest(handle) != rec["digests"][i]:
+            _, error = await _apply(handle, entry)
+            if error != entry.get("error") or _digest(handle) != rec["digests"][i]:
                 raise ReplayDivergence(f"state differs after call {i}")
         return handle
 
@@ -161,7 +179,30 @@ def _live(db, session_id):
     return handle, rec
 
 
+def _validate(handle, actor: str | None, intent: dict | None) -> dict:
+    """Reject calls that can't be right before they touch Nat20 or the log."""
+    v = get_live(handle)
+    if v.ended:
+        raise ValueError("combat has ended")
+    current = v.initiative[v.current_turn_index].entity_id
+    if intent is None:
+        if current in v.party_ids:
+            raise ValueError(f"it is {current}'s turn; submit an intent for them")
+        return {"op": "monster"}
+    if actor not in v.party_ids:
+        raise ValueError(f"unknown party member {actor!r}; party is {sorted(v.party_ids)}")
+    try:
+        parsed = PlayerIntent(**intent)
+    except Exception as exc:  # pydantic ValidationError
+        raise ValueError(f"invalid intent: {exc}") from exc
+    if actor != current and parsed.intent_type != "reaction":
+        raise ValueError(f"it is {current}'s turn, not {actor}'s")
+    return {"op": "intent", "actor": actor, "intent": parsed.model_dump(mode="json")}
+
+
 def start(db, session_id: int, start_spec: dict) -> dict:
+    if _load(db, session_id) is not None:
+        raise ValueError("a 5e combat is already active in this session; end it first")
     start_spec = dict(start_spec, session_id=session_id)
     handle = _run(_open(start_spec))
     rec = {
@@ -176,24 +217,23 @@ def start(db, session_id: int, start_spec: dict) -> dict:
     return status(db, session_id)
 
 
-def act(db, session_id: int, actor: str | None = None, intent: dict | None = None) -> list[dict]:
-    """Submit a PC intent (actor + intent) or, with neither, advance a monster turn."""
+def act(db, session_id: int, actor: str | None = None, intent: dict | None = None) -> dict:
+    """Submit a PC intent (actor + intent) or, with neither, advance a monster turn.
+
+    Returns {"events": [...], "error": str | None}. ValueError means the call was
+    rejected before reaching Nat20 and nothing was logged; ``error`` means Nat20
+    rejected it after we sent it, and the call is logged so replay stays in step.
+    """
     handle, rec = _live(db, session_id)
-    entry = (
-        {"op": "monster"}
-        if intent is None
-        else {
-            "op": "intent",
-            "actor": actor,
-            "intent": PlayerIntent(**intent).model_dump(mode="json"),
-        }
-    )
-    events = _run(_apply(handle, entry))
+    entry = _validate(handle, actor, intent)
+    events, error = _run(_apply(handle, entry))
+    if error:
+        entry["error"] = error
     rec["log"].append(entry)
     rec["digests"].append(_digest(handle))
     _store(db, session_id, rec)
     _CACHE[session_id] = (handle, len(rec["log"]), rec["digests"][-1])
-    return events
+    return {"events": events, "error": error}
 
 
 def status(db, session_id: int) -> dict:
@@ -203,18 +243,44 @@ def status(db, session_id: int) -> dict:
         "round": v.round_number,
         "current": v.initiative[v.current_turn_index].entity_id,
         "hp": dict(v.tracked_hp),
+        "temp_hp": {k: n for k, n in v.tracked_temp_hp.items() if n},
         "dead": sorted(v.dead_ids),
         "conditions": {k: sorted(s) for k, s in v.active_conditions.items() if s},
         "zones": dict(v.actor_zone),
+        "slots": {k: dict(d) for k, d in v.spell_slots_by_entity.items()},
+        "concentration": {k: [list(t) for t in c] for k, c in v.concentration_chain.items()},
+        "attacks_remaining": v.turn.attacks_remaining,
+        "ended": v.ended,
         "calls": len(rec["log"]),
     }
 
 
 def end(db, session_id: int) -> dict:
-    """Close the combat and hand results back to LoreKit's character rows (spike: HP only)."""
+    """Close the combat and clear the log. Returns the outcome (write-back is the caller's job)."""
     handle, rec = _live(db, session_id)
     result = _run(end_combat(handle))
     outcome = result.outcome.model_dump(mode="json")
     _store(db, session_id, None)
     _CACHE.pop(session_id, None)
     return outcome
+
+
+def active_sessions(db) -> list[tuple[int, str, int]]:
+    """(session_id, engine_version, calls) for every session with a stored combat."""
+    out = []
+    for sid, value in db.execute("SELECT session_id, value FROM session_meta WHERE key = ?", (META_KEY,)):
+        rec = json.loads(value)
+        out.append((sid, rec["engine_version"], len(rec["log"])))
+    return out
+
+
+if __name__ == "__main__":  # python -m lorekit.backends.nat20  (check before upgrading dnd5e-engine)
+    from lorekit.db import require_db
+
+    _db = require_db()
+    rows = active_sessions(_db)
+    print(f"installed dnd5e-engine {ENGINE_VERSION}; {len(rows)} active combat(s)")
+    for sid, ver, calls in rows:
+        print(
+            f"  session {sid}: engine {ver}, {calls} calls{'' if ver == ENGINE_VERSION else '  <-- version mismatch'}"
+        )
