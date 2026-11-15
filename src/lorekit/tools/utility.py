@@ -1,4 +1,5 @@
 from lorekit._mcp_app import mcp
+from lorekit.backends import cruncher_only
 from lorekit.tools._helpers import _resolve_system_path_for_session, _run_with_db
 
 
@@ -93,6 +94,7 @@ def export_clean() -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def rest(session_id: int, type: str) -> str:
     """Apply rest rules to all PCs in the session.
 

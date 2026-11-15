@@ -1,6 +1,7 @@
 import json
 
 from lorekit._mcp_app import mcp
+from lorekit.backends import cruncher_only
 from lorekit.rules import resolve_system_path, try_rules_calc
 from lorekit.tools._helpers import (
     _resolve_character,
@@ -50,6 +51,7 @@ def system_info(system: str = "", session_id: int = 0, section: str = "all") -> 
 
 
 @mcp.tool()
+@cruncher_only
 def rules_check(character_id: int | str, check: str, dc: int, system_path: str = "") -> str:
     """Roll a derived stat against a DC. Reads pre-computed values (run rules_calc first).
 
@@ -79,6 +81,7 @@ def rules_check(character_id: int | str, check: str, dc: int, system_path: str =
 
 
 @mcp.tool()
+@cruncher_only
 def rules_resolve(
     attacker_id: int | str, defender_id: int | str, action: str, options: str = "{}", system_path: str = ""
 ) -> str:
@@ -161,6 +164,7 @@ def rules_resolve(
 
 
 @mcp.tool()
+@cruncher_only
 def confirm_resolution(
     pending_id: int,
     reactions: str = "[]",
@@ -253,6 +257,7 @@ def end_turn(character_id: int | str, system_path: str = "") -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def combat_modifier(
     character_id: int | str,
     action: str,

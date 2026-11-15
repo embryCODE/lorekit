@@ -1,6 +1,7 @@
 import json
 
 from lorekit._mcp_app import mcp
+from lorekit.backends import cruncher_only
 from lorekit.tools._helpers import (
     _auto_register_reactions,
     _load_combat_cfg,
@@ -11,6 +12,7 @@ from lorekit.tools._helpers import (
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_start(
     session_id: int,
     zones: str = "[]",
@@ -83,6 +85,7 @@ def encounter_start(
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_status(session_id: int) -> str:
     """Return the current encounter state: round, turn, positions, distances.
 
@@ -105,6 +108,7 @@ def encounter_status(session_id: int) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_move(character_id: int | str, target_zone: str) -> str:
     """Move a character to a different zone during an encounter.
 
@@ -164,6 +168,7 @@ def encounter_move(character_id: int | str, target_zone: str) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_advance_turn(session_id: int) -> str:
     """Advance to the next character in initiative order.
 
@@ -187,6 +192,7 @@ def encounter_advance_turn(session_id: int) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_ready(
     character_id: int | str,
     action: str,
@@ -228,6 +234,7 @@ def encounter_ready(
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_execute_ready(character_id: int | str) -> str:
     """Fire a character's readied action.
 
@@ -253,6 +260,7 @@ def encounter_execute_ready(character_id: int | str) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_delay(character_id: int | str) -> str:
     """Delay the current character's turn.
 
@@ -277,6 +285,7 @@ def encounter_delay(character_id: int | str) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_undelay(character_id: int | str) -> str:
     """Insert a delayed character back into initiative and start their turn.
 
@@ -302,6 +311,7 @@ def encounter_undelay(character_id: int | str) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_end(session_id: int) -> str:
     """End the active encounter with combat summary.
 
@@ -325,6 +335,7 @@ def encounter_end(session_id: int) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_join(
     character_id: int | str,
     zone: str,
@@ -358,6 +369,7 @@ def encounter_join(
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_leave(character_id: int | str) -> str:
     """Remove a character from an active encounter (dismissed summon, death, retreat).
 
@@ -382,6 +394,7 @@ def encounter_leave(character_id: int | str) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_zone_update(session_id: int, zone_name: str, tags: str) -> str:
     """Modify zone tags mid-combat (fire spreads, wall collapses, Darkness cast).
 
@@ -408,6 +421,7 @@ def encounter_zone_update(session_id: int, zone_name: str, tags: str) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_zone_add(
     session_id: int,
     zone_name: str,
@@ -439,6 +453,7 @@ def encounter_zone_add(
 
 
 @mcp.tool()
+@cruncher_only
 def encounter_zone_remove(
     session_id: int,
     zone_name: str,

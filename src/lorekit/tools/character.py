@@ -3,6 +3,7 @@ import json
 import os
 
 from lorekit._mcp_app import mcp
+from lorekit.backends import cruncher_only
 from lorekit.rules import try_rules_calc
 from lorekit.tools._helpers import (
     _embed_ability_metadata,
@@ -106,6 +107,7 @@ def character_get_abilities(character_id: int) -> str:
 
 
 @mcp.tool()
+@cruncher_only
 def character_build(
     session: int,
     name: str,
