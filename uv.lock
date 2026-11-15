@@ -574,6 +574,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "dnd5e-engine" },
+    { name = "dnd5e-srd-data" },
     { name = "lorekit-cruncher" },
     { name = "mcp", extra = ["cli"] },
     { name = "platformdirs" },
@@ -596,7 +597,8 @@ server = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dnd5e-engine", specifier = ">=0.7.0" },
+    { name = "dnd5e-engine", specifier = "==0.7.0" },
+    { name = "dnd5e-srd-data", specifier = "==0.7.0" },
     { name = "lorekit-cruncher", directory = "cruncher" },
     { name = "mcp", extras = ["cli"] },
     { name = "platformdirs" },

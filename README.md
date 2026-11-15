@@ -48,7 +48,8 @@ creates the database automatically.
 ## Development
 
 ```bash
-uv sync --extra dev
+uv sync --all-extras --all-groups
+uv pip install -e systems/pf2e -e systems/mm3e   # unit tests need the packs
 pre-commit install
 
 # or
