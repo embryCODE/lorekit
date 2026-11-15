@@ -153,3 +153,57 @@ def dnd_combat_end(session_id: int) -> str:
     from lorekit.dnd55e.combat import end
 
     return _combat_call(end, session_id)
+
+
+def _char_call(fn, character_id, *args, **kwargs) -> str:
+    from lorekit.tools._helpers import _resolve_character
+
+    db = require_db()
+    try:
+        cid = _resolve_character(db, character_id)
+        return json.dumps(fn(db, cid, *args, **kwargs), sort_keys=True, default=str)
+    except (LoreKitError, ValueError) as e:
+        return f"ERROR: {e}"
+    finally:
+        db.close()
+
+
+@mcp.tool()
+@backend_only
+def dnd_check(
+    character_id: int | str,
+    kind: str,
+    name: str,
+    dc: int,
+    advantage: bool = False,
+    disadvantage: bool = False,
+    seed: int = 0,
+) -> str:
+    """Roll an out-of-combat check or save for a 5e character against a DC. The engine rolls; never invent dice.
+
+    kind: "skill" (name e.g. "stealth", "sleight_of_hand"), "ability" (name e.g. "strength")
+      or "saving_throw" (name e.g. "wisdom").
+    advantage/disadvantage cancel each other if both are set. Returns the d20, modifier, total,
+    success and the seed (pass the seed back to reproduce the same roll).
+    """
+    from lorekit.dnd55e.rules import check
+
+    return _char_call(check, character_id, kind, name, dc, advantage, disadvantage, seed)
+
+
+@mcp.tool()
+@backend_only
+def dnd_rest(character_id: int | str, type: str, hit_dice: int = 0, seed: int = 0) -> str:
+    """Rest a 5e character and write the result to their sheet.
+
+    type: "short" (spend `hit_dice` Hit Dice to heal; warlock pact slots return) or
+      "long" (full HP, all spell slots, half the Hit Dice back, exhaustion -1).
+    Call once per character who rests.
+    """
+    from lorekit.dnd55e.rules import long_rest, short_rest
+
+    if type == "short":
+        return _char_call(short_rest, character_id, hit_dice, seed)
+    if type == "long":
+        return _char_call(long_rest, character_id)
+    return "ERROR: type must be short or long"
