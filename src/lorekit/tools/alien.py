@@ -1,0 +1,315 @@
+"""GM-only Alien Evolved Beta 2 mutations and audience-filtered read tools.
+
+Every mutation needs a stable request ID and the latest expected revision.
+Use public status for narration; mutation results are explicitly GM-only.
+"""
+
+import json
+
+from lorekit._mcp_app import mcp
+from lorekit.alien import content
+from lorekit.alien.state import execute, load, projection
+from lorekit.backends import system_only
+from lorekit.db import LoreKitError, require_db
+
+alien_only = system_only("alien-evolved")
+
+
+def _object(raw: str) -> dict:
+    try:
+        value = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise LoreKitError("Expected a JSON object") from exc
+    if not isinstance(value, dict):
+        raise LoreKitError("Expected a JSON object")
+    return value
+
+
+def _mutate(session_id, intent, request_id, expected_revision, seed=None):
+    db = require_db()
+    try:
+        return json.dumps(execute(db, session_id, intent, request_id, expected_revision, seed), sort_keys=True)
+    except (LoreKitError, ValueError, TypeError) as exc:
+        return f"ERROR: {exc}"
+    finally:
+        db.close()
+
+
+@mcp.tool()
+@alien_only
+def alien_scene_status(session_id: int, audience: str = "public") -> str:
+    """Read canonical Alien state. Public is filtered; gm explicitly reveals private state."""
+    db = require_db()
+    try:
+        return json.dumps(projection(load(db, session_id)["state"], audience), sort_keys=True)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+    finally:
+        db.close()
+
+
+@mcp.tool()
+@alien_only
+def alien_character_import(session_id: int, actor_id: str, build: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: import a pregenerated human/synthetic; build contains final attributes, skills and local content IDs."""
+    try:
+        return _mutate(
+            session_id,
+            {"op": "character_import", "actor": actor_id, "build": _object(build)},
+            request_id,
+            expected_revision,
+        )
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_character_create(session_id: int, actor_id: str, build: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: validate standard point-buy against an imported local career and its talent options."""
+    try:
+        return _mutate(
+            session_id,
+            {"op": "character_create", "actor": actor_id, "build": _object(build)},
+            request_id,
+            expected_revision,
+        )
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_check(session_id: int, check: str, request_id: str, expected_revision: int, seed: int | None = None) -> str:
+    """GM-only: roll {actor,skill,attribute?,modifier?,helpers?,passive?,opponent?}. Returns dice and pending decision ID."""
+    try:
+        return _mutate(session_id, {**_object(check), "op": "check"}, request_id, expected_revision, seed)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_check_decide(
+    session_id: int, decision: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: decide {decision_id,actor,choice:accept|push|story_point,die?:zero-based index}."""
+    try:
+        return _mutate(session_id, {**_object(decision), "op": "check_decide"}, request_id, expected_revision, seed)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_content_import(session_id: int, bundle: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: validate/install local evolved-beta2 content before actors are created. Never uploads the PDF."""
+    try:
+        fingerprint = content.install(_object(bundle))
+        return _mutate(session_id, {"op": "content_import", "hash": fingerprint}, request_id, expected_revision)
+    except (LoreKitError, ValueError) as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_stress(
+    session_id: int, actor_id: str, reason: str, request_id: str, expected_revision: int, amount: int = 1
+) -> str:
+    """GM-only: apply a classified stress trigger; species/broken immunities are enforced."""
+    return _mutate(
+        session_id,
+        {"op": "stress", "actor": actor_id, "reason": reason, "amount": amount},
+        request_id,
+        expected_revision,
+    )
+
+
+@mcp.tool()
+@alien_only
+def alien_panic(
+    session_id: int, actor_id: str, reason: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: enqueue a classified panic trigger and resolve until a required choice or queue limit."""
+    return _mutate(
+        session_id, {"op": "panic", "actor": actor_id, "reason": reason}, request_id, expected_revision, seed
+    )
+
+
+def _json_command(session_id, raw, op, request_id, expected_revision, seed=None):
+    try:
+        return _mutate(session_id, {**_object(raw), "op": op}, request_id, expected_revision, seed)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_scene_setup(session_id: int, scene: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: configure {zones:{id:{cluttered,dark,crawlspace}},borders:[{a,b,open,door,locked,sealed}],placements:{actor:zone}}."""
+    return _json_command(session_id, scene, "scene_setup", request_id, expected_revision)
+
+
+@mcp.tool()
+@alien_only
+def alien_combat_start(
+    session_id: int, combat: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: draw initiative for {actors:[actor IDs],groups?:[[NPC IDs]],surprise?:[actor IDs]}."""
+    return _json_command(session_id, combat, "combat_start", request_id, expected_revision, seed)
+
+
+@mcp.tool()
+@alien_only
+def alien_combat_status(session_id: int, audience: str = "public") -> str:
+    """Read audience-filtered Alien combat status; gm reveals mechanical/private state."""
+    return alien_scene_status(session_id, audience)
+
+
+@mcp.tool()
+@alien_only
+def alien_combat_act(
+    session_id: int, intent: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: op attack, defense_decide, check_decide, burst_decide, panic_decide, move, hold_off or end_turn.
+
+    Declare attack {actor,target,weapon?:inventory ID,aim?,weak_spot?,full_auto?,conserve?}.
+    Defenses require {actor,decision_id,choice:defend|dodge|decline} BEFORE dice are rolled.
+    Check decisions use choice accept|push|story_point. Unimplemented actions fail explicitly.
+    """
+    try:
+        parsed = _object(intent)
+        if parsed.get("op") not in {
+            "attack",
+            "creature_act",
+            "signature_decide",
+            "defense_decide",
+            "check_decide",
+            "burst_decide",
+            "panic_decide",
+            "move",
+            "approach",
+            "hold_off",
+            "end_turn",
+            "queue_continue",
+        }:
+            raise LoreKitError("Unsupported combat intent")
+        return _mutate(session_id, parsed, request_id, expected_revision, seed)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_combat_end(session_id: int, request_id: str, expected_revision: int) -> str:
+    """GM-only: end combat, retaining canonical health, supplies, injuries and effects."""
+    return _mutate(session_id, {"op": "combat_end"}, request_id, expected_revision)
+
+
+@mcp.tool()
+@alien_only
+def alien_supply(
+    session_id: int, actor_id: str, item_id: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: roll an inventory item's air/ammo/power supply, at most six dice."""
+    return _mutate(
+        session_id, {"op": "supply", "actor": actor_id, "item": item_id}, request_id, expected_revision, seed
+    )
+
+
+@mcp.tool()
+@alien_only
+def alien_time_advance(
+    session_id: int, unit: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: advance one logical round/stretch/shift/day; resolve due effects before later actions."""
+    return _mutate(session_id, {"op": "time_advance", "unit": unit}, request_id, expected_revision, seed)
+
+
+@mcp.tool()
+@alien_only
+def alien_character_view(session_id: int, actor_id: str, audience: str = "public") -> str:
+    """Read one actor's public facts or explicit GM-only mechanical sheet."""
+    from lorekit.alien.state import actor
+
+    db = require_db()
+    try:
+        state = load(db, session_id)["state"]
+        if audience == "gm":
+            actor(state, actor_id)
+        visible = projection(state, audience)
+        return json.dumps(
+            {
+                "visibility": "gm_only" if audience == "gm" else "public",
+                "profile": state["profile"],
+                "revision": state["revision"],
+                "actor": visible["actors"].get(actor_id, {}),
+            },
+            sort_keys=True,
+        )
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+    finally:
+        db.close()
+
+
+@mcp.tool()
+@alien_only
+def alien_stealth_act(
+    session_id: int, intent: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: op stealth_act {actor,action:move|hide|guard|search|wait,zone?,group?}, stealth_phase, tracker or detection_decide."""
+    try:
+        parsed = _object(intent)
+        if parsed.get("op") not in {"stealth_act", "stealth_phase", "tracker", "detection_decide", "check_decide"}:
+            raise LoreKitError("Unsupported stealth operation")
+        return _mutate(session_id, parsed, request_id, expected_revision, seed)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_recover(
+    session_id: int, recovery: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: {actor,target?,method:first_aid|rally|repair|surgery|stop_panic|rest,...}.
+
+    Rest needs safe:true; repairs/surgery need shift_completed:true. Check decisions
+    are handled by alien_check_decide. Resources, injuries and clocks persist.
+    """
+    return _json_command(session_id, recovery, "recover", request_id, expected_revision, seed)
+
+
+@mcp.tool()
+@alien_only
+def alien_story_award(session_id: int, actor_id: str, reason: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: award one cinematic story point for an explicit agenda-related reason; cap three."""
+    return _mutate(
+        session_id, {"op": "story_award", "actor": actor_id, "reason": reason}, request_id, expected_revision
+    )
+
+
+@mcp.tool()
+@alien_only
+def alien_rules_override(session_id: int, ruling: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: audited exceptional ruling {reason,actor?,changes?:{health,stress,armor,dead,zone,hidden},clear_pending?:true}.
+
+    This is an explicit override, not a claim that an unsupported rule was
+    automated. Profile/content versions cannot be patched through this tool.
+    """
+    return _json_command(session_id, ruling, "override", request_id, expected_revision)
+
+
+@mcp.tool()
+@alien_only
+def alien_creature_import(
+    session_id: int, actor_id: str, template_id: str, name: str, request_id: str, expected_revision: int
+) -> str:
+    """GM-only: create a creature actor from a fully validated local signature table."""
+    return _mutate(
+        session_id,
+        {"op": "creature_import", "actor": actor_id, "template": template_id, "name": name},
+        request_id,
+        expected_revision,
+    )

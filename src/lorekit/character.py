@@ -69,6 +69,9 @@ def create(
     gender: str = "",
     prefetch: int = -1,
 ) -> str:
+    session = db.execute("SELECT system_type FROM sessions WHERE id=?", (session_id,)).fetchone()
+    if session and session[0] == "alien-evolved":
+        raise LoreKitError("Use alien_character_create or alien_character_import")
     if char_type not in ("pc", "npc"):
         raise LoreKitError("type must be pc or npc")
     if prefetch == -1:
@@ -115,6 +118,19 @@ def view(db, character_id: int) -> str:
     ).fetchone()
     if row is None:
         raise LoreKitError(f"Character {character_id} not found")
+    from lorekit.backends import session_backend
+
+    backend = session_backend(db, row[1])
+    if backend and backend.name == "alien":
+        import json
+
+        from lorekit.alien.state import load, projection
+
+        state = load(db, row[1])["state"]
+        aid = next((aid for aid, a in state["actors"].items() if a.get("character_id") == character_id), None)
+        projected = projection(state)["actors"].get(aid, {})
+        return json.dumps({"profile": state["profile"], "character": projected,
+                           "note": "Use alien_scene_status audience=gm for private mechanics"}, sort_keys=True)
     lines = [
         f"ID: {row[0]}",
         f"SESSION: {row[1]}",
@@ -221,6 +237,10 @@ def cmd_list(db, args):
 def update(
     db, character_id: int, name: str = "", level: int = 0, status: str = "", region_id: int = 0, gender: str = ""
 ) -> str:
+    from lorekit.backends import reject_alien_mechanical_update
+
+    if level or status or name:
+        reject_alien_mechanical_update(db, character_id)
     _COLUMN_MAP = {
         "name": ("name", str),
         "gender": ("gender", str),
@@ -267,6 +287,9 @@ def cmd_update(db, args):
 
 
 def set_attr(db, character_id: int, category: str, key: str, value: str) -> str:
+    from lorekit.backends import reject_alien_mechanical_update
+
+    reject_alien_mechanical_update(db, character_id)
     from lorekit.queries import upsert_attribute
 
     upsert_attribute(db, character_id, category, key, value)
@@ -313,6 +336,9 @@ def cmd_get_attr(db, args):
 
 
 def set_item(db, character_id: int, name: str, desc: str = "", qty: int = 1, equipped: int = 0) -> str:
+    from lorekit.backends import reject_alien_mechanical_update
+
+    reject_alien_mechanical_update(db, character_id)
     cur = db.execute(
         "INSERT INTO character_inventory (character_id, name, description, quantity, equipped) "
         "VALUES (?, ?, ?, ?, ?) "
@@ -353,6 +379,11 @@ def cmd_get_items(db, args):
 
 
 def remove_item(db, item_id: int) -> str:
+    from lorekit.backends import reject_alien_mechanical_update
+
+    row = db.execute("SELECT character_id FROM character_inventory WHERE id=?", (item_id,)).fetchone()
+    if row:
+        reject_alien_mechanical_update(db, row[0])
     db.execute("DELETE FROM character_inventory WHERE id = ?", (item_id,))
     db.commit()
     return f"ITEM_REMOVED: {item_id}"
@@ -366,6 +397,9 @@ def cmd_remove_item(db, args):
 def set_ability(
     db, character_id: int, name: str, desc: str, category: str, uses: str = "at_will", cost: float = 0
 ) -> str:
+    from lorekit.backends import reject_alien_mechanical_update
+
+    reject_alien_mechanical_update(db, character_id)
     cur = db.execute(
         "INSERT INTO character_abilities (character_id, name, description, category, uses, cost) "
         "VALUES (?, ?, ?, ?, ?, ?) "
@@ -393,6 +427,9 @@ def cmd_set_ability(db, args):
 
 def remove_ability(db, character_id: int, name: str) -> str:
     """Remove an ability by name from a character."""
+    from lorekit.backends import reject_alien_mechanical_update
+
+    reject_alien_mechanical_update(db, character_id)
     cur = db.execute(
         "DELETE FROM character_abilities WHERE character_id = ? AND name = ?",
         (character_id, name),

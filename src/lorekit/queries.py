@@ -36,6 +36,10 @@ def get_session_meta(db, session_id: int, key: str) -> str | None:
 
 def upsert_attribute(db, character_id: int, category: str, key: str, value: str) -> None:
     """Insert or update a single character attribute."""
+    from lorekit.backends import reject_alien_mechanical_update
+
+    if category != "system" or key not in ("model", "provider"):
+        reject_alien_mechanical_update(db, character_id)
     db.execute(
         "INSERT INTO character_attributes (character_id, category, key, value) "
         "VALUES (?, ?, ?, ?) "

@@ -58,3 +58,27 @@ def test_unknown_session_does_not_block(make_session):
         return "ran"
 
     assert crunch(session_id=999999) == "ran"
+
+
+def test_concrete_backend_tools_reject_each_other_and_missing_ids(make_session):
+    from lorekit.backends import system_only
+    from lorekit.db import require_db
+
+    alien = make_session(system="alien-evolved")
+    dnd = make_session(system="dnd55e")
+
+    @backend_only
+    def dnd_probe(session_id: int, character_id: int = 0):
+        return "ran"
+
+    @system_only("alien-evolved")
+    def alien_probe(session_id: int, character_id: int = 0):
+        return "ran"
+
+    assert "alien_" in dnd_probe(alien)
+    assert "dnd_" in alien_probe(dnd)
+    assert alien_probe(alien) == "ran"
+    assert dnd_probe(999999).startswith("ERROR")
+    assert alien_probe(alien, 999999).startswith("ERROR")
+    cid = int(character_create(session=dnd, name="DND actor", level=1).split(": ")[1])
+    assert alien_probe(alien, cid).startswith("ERROR")

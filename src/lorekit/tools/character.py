@@ -389,6 +389,10 @@ def character_sheet_update(
     db = require_db()
     try:
         character_id = _resolve_character(db, character_id)
+        if level or status or attrs_list or items_list or abilities_list or remove_list or remove_abilities_list:
+            from lorekit.backends import reject_alien_mechanical_update
+
+            reject_alien_mechanical_update(db, character_id)
         results = []
 
         if level or status or region or gender:

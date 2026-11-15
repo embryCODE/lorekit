@@ -139,6 +139,11 @@ def cmd_update(db, args):
 
 
 def meta_set(db, session_id: int, key: str, value: str) -> str:
+    from lorekit.alien.state import KEY
+
+    row = db.execute("SELECT system_type FROM sessions WHERE id=?", (session_id,)).fetchone()
+    if key == KEY or (row and row[0] == "alien-evolved" and key == "rules_system"):
+        raise LoreKitError("Reserved Alien state: use alien_* tools")
     db.execute(
         "INSERT INTO session_meta (session_id, key, value) VALUES (?, ?, ?) "
         "ON CONFLICT(session_id, key) DO UPDATE SET value = excluded.value",
@@ -161,6 +166,10 @@ def cmd_meta_set(db, args):
 
 
 def meta_get(db, session_id: int, key: str = "") -> str:
+    from lorekit.alien.state import KEY
+
+    if key == KEY:
+        return "Alien state is GM-only; use alien_scene_status with an explicit audience"
     if key:
         row = db.execute(
             "SELECT value FROM session_meta WHERE session_id = ? AND key = ?",
@@ -170,8 +179,8 @@ def meta_get(db, session_id: int, key: str = "") -> str:
         return f"{key}: {value}"
     else:
         cur = db.execute(
-            "SELECT key, value FROM session_meta WHERE session_id = ? ORDER BY key",
-            (session_id,),
+            "SELECT key, value FROM session_meta WHERE session_id = ? AND key != ? ORDER BY key",
+            (session_id, KEY),
         )
         return format_table(cur)
 
