@@ -101,3 +101,22 @@ def test_character_view_notes_active_combat(make_session):
         },
     )
     assert "dnd_combat_status" in character_view(character_id=c["character_id"])
+
+
+def test_bad_choice_error_lists_valid_options_and_good_tokens_work(make_session):
+    sid = make_session(system="dnd55e")
+    fighter = {
+        "species_slug": "halfling",
+        "class_slug": "fighter",
+        "level": 3,
+        "background_slug": "criminal",
+        "ability_scores": {"str": 15, "dex": 13, "con": 14, "int": 8, "wis": 12, "cha": 10},
+        "equipment": ["studded-leather-armor", "warhammer"],
+    }
+    bad = dnd_character_create(
+        session_id=sid, name="Roxy", build=json.dumps({**fighter, "selected_choices": ["dueling"]})
+    )
+    assert bad.startswith("ERROR") and "defense" in bad and "skill:<skill>" in bad
+    good = {**fighter, "selected_choices": ["defense", "skill:acrobatics", "skill:persuasion"]}
+    out = json.loads(dnd_character_create(session_id=sid, name="Roxy", build=json.dumps(good)))
+    assert out["character_id"]

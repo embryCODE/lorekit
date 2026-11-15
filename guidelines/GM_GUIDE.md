@@ -832,7 +832,13 @@ and optionally `subclass_slug` (from level 3), `background_slug`, `equipment`
 (a list of SRD item slugs, e.g. `["chain-mail","longsword","shield"]`; **without
 armor a character has AC 10 + Dex**, so ask the player and include their gear),
 `classes` (multiclass, e.g. `{"fighter":2,"wizard":1}` instead of
-`class_slug`+`level`). Roll the ability scores with `roll_dice` (4d6kh3 six
+`class_slug`+`level`), and `selected_choices`: a list of tokens such as
+`"skill:acrobatics"`, `"expertise:stealth"`, `"asi:fighter:4:str+2"` or a bare
+slug for a class feature choice (the fighter's fighting style is one of
+`archery`, `defense`, `great-weapon-fighting`, `two-weapon-fighting`).
+**Only SRD 5.2.1 options exist** (no Dueling, for example) and weapon masteries
+cannot be chosen; offer the player the real options. A rejected build returns
+the valid options: read the error instead of guessing formats. Roll the ability scores with `roll_dice` (4d6kh3 six
 times) or use the standard array 15,14,13,12,10,8, and let the player assign
 them. Show the player the derived HP, AC, speed, spell slots and Hit Dice that
 come back. Invalid builds return an error and create nothing. Level up with

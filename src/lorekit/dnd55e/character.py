@@ -36,12 +36,37 @@ def _loader():
     return BundledAssetLoader()
 
 
+CHOICE_HELP = (
+    "selected_choices tokens: 'skill:<skill>' (e.g. skill:acrobatics), 'expertise:<skill>', "
+    "'asi:<class>:<level>:<ability>+<n>[,...]' (e.g. asi:fighter:4:str+2), 'feat:<class>:<level>:<feat>', "
+    "or a bare slug for a class/subclass/species feature choice (e.g. defense). "
+    "Weapon masteries are not a build choice in this engine."
+)
+
+
+def _choice_options(build: dict) -> str:
+    """List the feature-choice options the build's classes offer, to make a bad token fixable."""
+    loader = _loader()
+    lines = []
+    for cls, lvl in (build.get("classes") or {build.get("class_slug"): build.get("level", 1)}).items():
+        try:
+            for fc in loader.get_class(cls).feature_choices:
+                if any(step.count > 0 and step.level <= lvl for step in fc.schedule):
+                    lines.append(f"{cls}: {', '.join(o.slug for o in fc.pool)}")
+        except Exception:  # noqa: BLE001 - hint only
+            continue
+    return "; ".join(lines)
+
+
 def derive(build: dict):
     """Validate a build through Nat20 and return its derived sheet. Raises LoreKitError."""
     try:
         return derive_sheet(build_spec(build), loader=_loader())
     except (ValueError, TypeError, KeyError) as exc:
-        raise LoreKitError(f"invalid 5e build: {exc}") from exc
+        msg = f"invalid 5e build: {exc}"
+        if "selected_choices" in str(exc):
+            msg += f". {CHOICE_HELP} Options at this build: {_choice_options(build)}"
+        raise LoreKitError(msg) from exc
 
 
 def _levels(build: dict) -> int:
