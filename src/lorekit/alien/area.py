@@ -10,11 +10,21 @@ from lorekit.db import LoreKitError
 
 
 def begin(state, spec, attack):
-    targets = [
-        tid
-        for tid, target in sorted(state["actors"].items())
-        if tid != attack["target"] and target["zone"] == actor(state, attack["target"])["zone"] and not target["dead"]
-    ]
+    pair = (
+        spec.get("continuation", {}).get("attacks")
+        if spec.get("continuation", {}).get("kind") == "quick_shot"
+        else None
+    )
+    targets = []
+    for index, blast in enumerate(pair or [attack]):
+        if blast["definition"].get("explosive"):
+            targets.extend(
+                {"actor": tid, "blast": index}
+                for tid, target in sorted(state["actors"].items())
+                if tid != blast["target"]
+                and target["zone"] == actor(state, blast["target"])["zone"]
+                and not target["dead"]
+            )
     state["pending"] = {
         "type": "area_defenses",
         "spec": spec,
@@ -31,7 +41,7 @@ def decide(state, intent, bundle, rng):
     if not p or p["type"] != "area_defenses":
         raise LoreKitError("No explosive-weapon defense decision")
     if p["index"] < len(p["targets"]):
-        tid = p["targets"][p["index"]]
+        tid = p["targets"][p["index"]]["actor"]
         if intent.get("actor") != tid or intent.get("choice") not in ("dodge", "decline"):
             raise LoreKitError("Next secondary target must choose dodge or decline")
         target = actor(state, tid)
@@ -48,12 +58,13 @@ def decide(state, intent, bundle, rng):
     quick_shot = spec["continuation"] if spec["continuation"]["kind"] == "quick_shot" else None
     primary_index = 1 if opponents and not quick_shot else None
     targets = []
-    for tid, choice in zip(p["targets"], p["choices"], strict=True):
+    for subject, choice in zip(p["targets"], p["choices"], strict=True):
+        tid = subject["actor"]
         index = None
         if choice == "dodge":
             opponents.append({"actor": tid, "skill": "mobility", "context": "dodge"})
             index = len(opponents)
-        targets.append({"actor": tid, "index": index})
+        targets.append({"actor": tid, "index": index, "blast": subject["blast"]})
     spec["opponents"] = opponents
     spec["_area"] = True
     spec["continuation"] = {
@@ -70,14 +81,27 @@ def decide(state, intent, bundle, rng):
 def finish(state, result, bundle, rng):
     c = result["continuation"]
     if c.get("quick_shot"):
-        area_result = copy.deepcopy(result)
-        area_result["continuation"]["quick_shot"] = None
+        areas = {}
+        for index, attack in enumerate(c["quick_shot"]["attacks"]):
+            if not attack["definition"].get("explosive"):
+                continue
+            area_result = copy.deepcopy(result)
+            if index == 1:
+                for field in ("checks", "successes"):
+                    area_result[field][0], area_result[field][1] = area_result[field][1], area_result[field][0]
+            area_result["continuation"] = {
+                "kind": "area",
+                "attack": copy.deepcopy(attack),
+                "primary_index": None,
+                "targets": [entry for entry in c["targets"] if entry["blast"] == index],
+            }
+            areas[str(index)] = area_result
         return combat.finish_quick_shot(
             state,
             {
                 "checks": result["checks"][:2],
                 "successes": result["successes"][:2],
-                "continuation": {**c["quick_shot"], "area_result": area_result},
+                "continuation": {**c["quick_shot"], "area_results": areas},
             },
             bundle,
             rng,

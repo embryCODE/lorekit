@@ -302,3 +302,46 @@ def test_quick_shot_winner_can_abort_the_other_shot_but_ties_fire_both():
     s = scenario([1, 1])
     assert s["actors"]["a"]["health"] == s["actors"]["b"]["health"] == 0
     assert s["actors"]["a"]["inventory"][0]["supply"] == s["actors"]["b"]["inventory"][0]["supply"] == 0
+
+
+def test_initiative_result_exposes_resumed_panic_not_a_stale_empty_pending(make_session):
+    sid = make_session(system="alien-evolved")
+    db = require_db()
+    b = {
+        "profile": "evolved-beta2",
+        "source": "Original interrupted initiative fixture",
+        "collections": {"talents": {"quick": {"page": 1, "effects": [{"hook": "fast_reflexes"}]}}},
+    }
+    serial = 0
+
+    def act(intent, seed=1):
+        nonlocal serial
+        revision = load(db, sid)["state"]["revision"]
+        serial += 1
+        return execute(db, sid, intent, f"resume-{serial}", revision, seed)
+
+    act({"op": "content_import", "hash": content.install(b)})
+    for aid, kind in [("a", "pc"), ("b", "npc")]:
+        act(
+            {
+                "op": "character_import",
+                "actor": aid,
+                "build": {
+                    "name": aid,
+                    "kind": kind,
+                    "attributes": dict(strength=3, agility=3, wits=3, empathy=3),
+                    "talents": ["quick"] if aid == "a" else [],
+                },
+            }
+        )
+    act({"op": "scene_setup", "zones": {"room": {}}, "placements": {"a": "room", "b": "room"}})
+    act({"op": "stress", "actor": "a", "amount": 12, "reason": "Test fear"})
+    act({"op": "panic", "actor": "a", "reason": "Test horror"})
+    out = act({"op": "panic_decide", "actor": "a", "target": "b", "approach": True})
+    assert out["pending"]["type"] == "initiative"
+    card = out["pending"]["choice"]["cards"][0]
+    out = act({"op": "initiative_decide", "actor": "a", "card": card})
+    assert out["pending"]["type"] == "panic_choice"
+    assert out["pending"] == load(db, sid)["state"]["pending"]
+    verify(load(db, sid))
+    db.close()

@@ -27,18 +27,43 @@ async def test_alien_tools_over_real_mcp_stdio(tmp_path):
                 assert not result.isError, result
                 return "\n".join(part.text for part in result.content if hasattr(part, "text"))
 
-            setup = await call("session_setup", name="Isolated Alien test", setting="Original test station", system="alien-evolved")
+            setup = await call(
+                "session_setup", name="Isolated Alien test", setting="Original test station", system="alien-evolved"
+            )
             sid = int(setup.split("SESSION_CREATED: ")[1].splitlines()[0])
-            imported = json.loads(await call("alien_character_import", session_id=sid, actor_id="engineer",
-                build=json.dumps({"name": "Engineer", "attributes": dict(strength=3, agility=3, wits=4, empathy=4)}),
-                request_id="import", expected_revision=0))
+            imported = json.loads(
+                await call(
+                    "alien_character_import",
+                    session_id=sid,
+                    actor_id="engineer",
+                    build=json.dumps(
+                        {"name": "Engineer", "attributes": dict(strength=3, agility=3, wits=4, empathy=4)}
+                    ),
+                    request_id="import",
+                    expected_revision=0,
+                )
+            )
             assert imported["revision"] == 1
-            rolled = json.loads(await call("alien_check", session_id=sid,
-                check=json.dumps({"actor": "engineer", "skill": "comtech"}), request_id="roll", expected_revision=1, seed=1))
+            rolled = json.loads(
+                await call(
+                    "alien_check",
+                    session_id=sid,
+                    check=json.dumps({"actor": "engineer", "skill": "comtech"}),
+                    request_id="roll",
+                    expected_revision=1,
+                    seed=1,
+                )
+            )
             pending = rolled["pending"]
-            decided = json.loads(await call("alien_check_decide", session_id=sid,
-                decision=json.dumps({"actor": "engineer", "decision_id": pending["id"], "choice": "accept"}),
-                request_id="accept", expected_revision=2))
+            decided = json.loads(
+                await call(
+                    "alien_check_decide",
+                    session_id=sid,
+                    decision=json.dumps({"actor": "engineer", "decision_id": pending["id"], "choice": "accept"}),
+                    request_id="accept",
+                    expected_revision=2,
+                )
+            )
             assert decided["type"] == "check_complete"
             public = json.loads(await call("alien_scene_status", session_id=sid))
             assert public["revision"] == 3

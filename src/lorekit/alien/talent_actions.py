@@ -57,6 +57,9 @@ def act(state, intent, bundle, rng):
             or len(set(ids)) != len(ids)
         ):
             raise LoreKitError("Nursing needs a completed shift and distinct patients within Medical Aid capacity")
+        if a.get("care_shift_used") == state["clocks"]["shift"]:
+            raise LoreKitError("This completed shift has already been spent on care")
+        a["care_shift_used"] = state["clocks"]["shift"]
         for tid in ids:
             patient = actor(state, tid)
             if patient["dead"] or patient["zone"] != a["zone"]:
@@ -77,6 +80,8 @@ def act(state, intent, bundle, rng):
             raise LoreKitError("Analysis needs an examined object ID and a completed stretch outside combat")
         if object_id in a.get("analyzed", []):
             raise LoreKitError("This object has already been analyzed")
+        if any(object_id in other.get("analyzed", []) for other in state["actors"].values()):
+            raise LoreKitError("This object has already had its single Analysis attempt")
         a.setdefault("analyzed", []).append(object_id)
         continuation["object"] = object_id
         skill = "observation"
@@ -134,7 +139,9 @@ def finish(state, result):
         for tid, other in state["actors"].items():
             if tid != aid and other["kind"] == "pc" and other["zone"] == a["zone"] and not other["dead"]:
                 if result["success"]:
-                    other["stress"] = max(0, other["stress"] - 1)
+                    from lorekit.alien.consumables import relieve
+
+                    relieve(state, tid, 1)
                 else:
                     effects.stress(other, 1)
         if result["success"]:
@@ -149,7 +156,9 @@ def finish(state, result):
         event["order"] = c["order"]
     elif hook == "counselor" and result["success"]:
         target = actor(state, c["target"])
-        target["stress"] = max(0, target["stress"] - successes)
+        from lorekit.alien.consumables import relieve
+
+        relieve(state, c["target"], successes)
     event["pending"] = copy.deepcopy(state["pending"])
     return event
 

@@ -61,11 +61,32 @@ def initial() -> dict:
 def load(db, session_id: int) -> dict:
     require_session(db, session_id)
     row = db.execute("SELECT value FROM session_meta WHERE session_id = ? AND key = ?", (session_id, KEY)).fetchone()
-    record = json.loads(row[0]) if row else {"base": initial(), "state": initial(), "audit": []}
+    try:
+        record = json.loads(row[0]) if row else {"base": initial(), "state": initial(), "audit": []}
+    except (ValueError, TypeError) as exc:
+        raise LoreKitError("Invalid Alien persistence envelope") from exc
+    if (
+        not isinstance(record, dict)
+        or set(record) != {"base", "state", "audit"}
+        or not isinstance(record["audit"], list)
+    ):
+        raise LoreKitError("Invalid Alien persistence envelope")
     state = record["state"]
     validate_snapshot(state)
     if state.get("profile") != PROFILE or state.get("version") != VERSION:
         raise LoreKitError("Incompatible Alien rules profile/version; explicit migration required")
+    validate_snapshot(record["base"])
+    audit = record["audit"]
+    if any(
+        not isinstance(entry, dict)
+        or not {"intent", "seed", "result", "digest", "request_id", "signature"} <= set(entry)
+        for entry in audit
+    ):
+        raise LoreKitError("Invalid Alien audit envelope")
+    if state["revision"] != record["base"]["revision"] + len(audit) or digest(state) != (
+        audit[-1]["digest"] if audit else digest(record["base"])
+    ):
+        raise LoreKitError("Alien snapshot/audit digest mismatch; restore a matching checkpoint")
     return record
 
 
@@ -86,8 +107,14 @@ def projection(state: dict, audience: str = "public") -> dict:
         if not a.get("revealed", a.get("kind") == "pc"):
             continue
         visible = {"id": aid, "name": a["name"]}
-        if a.get("kind") == "pc" and not a.get("secret_identity"):
-            visible.update({key: copy.deepcopy(a[key]) for key in ("health", "health_max", "stress", "story_points")})
+        visible.update(
+            {
+                key: copy.deepcopy(a[key])
+                for key in a.get("public_fields", [])
+                if key in {"health", "health_max", "stress", "story_points", "species"}
+                and not (key == "species" and a.get("secret_identity"))
+            }
+        )
         if not a.get("hidden", False):
             visible["zone"] = a.get("zone")
         actors[aid] = visible
@@ -178,6 +205,7 @@ def execute(
         working["revision"] += 1
         validate_snapshot(working)
         result = {
+            **result,
             "visibility": "gm_only",
             "profile": PROFILE,
             "version": VERSION,
@@ -187,7 +215,6 @@ def execute(
             "seed": actual_seed,
             "pending": copy.deepcopy(working["pending"]),
             "queue_count": len(working["queue"]),
-            **result,
         }
         entry = {
             "identity_rows": identities,
@@ -233,6 +260,7 @@ def verify(record: dict) -> None:
             refresh_equipment(current_actor, active_bundle)
         state["revision"] += 1
         expected_result = {
+            **result,
             "visibility": "gm_only",
             "profile": PROFILE,
             "version": VERSION,
@@ -242,7 +270,6 @@ def verify(record: dict) -> None:
             "seed": entry["seed"],
             "pending": copy.deepcopy(state["pending"]),
             "queue_count": len(state["queue"]),
-            **result,
         }
         if digest(state) != entry["digest"] or expected_result != entry["result"]:
             raise LoreKitError(f"Alien replay divergence at command {index}")
@@ -269,13 +296,54 @@ def validate_snapshot(state: dict) -> None:
         integer(value, f"clock {key}")
     if any(type(value) is not bool for value in state["options"].values()):
         raise LoreKitError("Invalid Alien option flag")
-    for a in state["actors"].values():
+    for aid, a in state["actors"].items():
+        if not isinstance(aid, str) or not aid:
+            raise LoreKitError("Invalid Alien actor identifier")
         if (
             not isinstance(a, dict)
             or a.get("species") not in ("human", "synthetic", "xenomorph")
             or a.get("kind") not in ("pc", "npc")
         ):
             raise LoreKitError("Invalid Alien actor")
+        if not isinstance(a.get("name"), str) or not a["name"] or not isinstance(a.get("private"), dict):
+            raise LoreKitError("Invalid Alien identity/private state")
+        if type(a.get("resolve")) is not int or not isinstance(a.get("inventory"), list):
+            raise LoreKitError("Invalid Alien Resolve/inventory")
+        seen_items = set()
+        for item in a["inventory"]:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("id"), str)
+                or item["id"] in seen_items
+                or not isinstance(item.get("content_id"), str)
+            ):
+                raise LoreKitError("Invalid Alien inventory identity")
+            seen_items.add(item["id"])
+            for number in ("quantity", "supply", "reloads"):
+                integer(item.get(number, 0), "inventory " + number)
+            if "armor_current" in item:
+                integer(item["armor_current"], "corroded armor")
+            for flag in ("equipped", "dropped", "active_air", "jammed"):
+                if flag in item and type(item[flag]) is not bool:
+                    raise LoreKitError("Invalid Alien inventory flag")
+        public = a.get("public_fields", [])
+        if not isinstance(public, list) or any(
+            field not in {"health", "health_max", "stress", "story_points", "species"} for field in public
+        ):
+            raise LoreKitError("Invalid public mechanical disclosure")
+        if state["scene"] and a.get("zone") is not None and a["zone"] not in state["scene"]["zones"]:
+            raise LoreKitError("Actor position references an unknown scene zone")
+        adjacent = a.get("adjacent", [])
+        if not isinstance(adjacent, list) or len(set(adjacent)) != len(adjacent):
+            raise LoreKitError("Invalid Adjacent positions")
+        for other_id in adjacent:
+            if (
+                other_id == aid
+                or other_id not in state["actors"]
+                or state["actors"][other_id]["zone"] != a["zone"]
+                or aid not in state["actors"][other_id].get("adjacent", [])
+            ):
+                raise LoreKitError("Adjacent positions must be reciprocal and in the same zone")
         integer(a.get("health_max"), "maximum Health", 1)
         integer(a.get("health"), "current Health", 0, a["health_max"])
         integer(a.get("stress"), "stress")

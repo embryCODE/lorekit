@@ -241,9 +241,17 @@ def test_round_injury_rolls_on_actors_turn_not_round_boundary(make_session):
 
     sid = make_session(system="alien-evolved")
     db = require_db()
-    bundle = {"profile": "evolved-beta2", "source": "Original fixtures", "collections": {
-        "injuries": {str(t*10+u): {"page": 1, "effects": [], "lethal": True, "interval": "round"} for t in range(1, 7) for u in range(1, 7)}
-    }}
+    bundle = {
+        "profile": "evolved-beta2",
+        "source": "Original fixtures",
+        "collections": {
+            "injuries": {
+                str(t * 10 + u): {"page": 1, "effects": [], "lethal": True, "interval": "round"}
+                for t in range(1, 7)
+                for u in range(1, 7)
+            }
+        },
+    }
     apply(db, sid, {"op": "content_import", "hash": install(bundle)}, "content")
     for aid in ("a", "b"):
         apply(db, sid, {"op": "character_import", "actor": aid, "build": spec(kind="npc")}, f"create-{aid}")
@@ -259,4 +267,80 @@ def test_round_injury_rolls_on_actors_turn_not_round_boundary(make_session):
     apply(db, sid, {"op": "end_turn", "actor": second}, "end-second", seed=5)
     assert load(db, sid)["state"]["actors"][first]["injuries"][0]["successes"] == 1
     verify(load(db, sid))
+    db.close()
+
+
+def test_public_shape_does_not_fingerprint_secret_identity(make_session):
+    sid = make_session(system="alien-evolved")
+    db = require_db()
+    apply(db, sid, {"op": "character_import", "actor": "human", "build": spec()}, "human")
+    apply(
+        db,
+        sid,
+        {"op": "character_import", "actor": "cover", "build": spec(species="synthetic", secret_identity=True)},
+        "synthetic",
+    )
+    public = projection(load(db, sid)["state"])
+    assert set(public["actors"]["human"]) == set(public["actors"]["cover"])
+    apply(
+        db,
+        sid,
+        {"op": "disclose", "actor": "human", "fields": ["health"], "reason": "Player publicly checks their wound"},
+        "disclose",
+    )
+    assert projection(load(db, sid)["state"])["actors"]["human"]["health"] == 3
+    with pytest.raises(LoreKitError, match="revelation"):
+        apply(
+            db,
+            sid,
+            {"op": "disclose", "actor": "cover", "fields": ["species"], "reason": "Attempt premature disclosure"},
+            "bad-reveal",
+        )
+    verify(load(db, sid))
+    db.close()
+
+
+def test_narrative_success_budget_cannot_be_spent_twice(make_session):
+    sid = make_session(system="alien-evolved")
+    db = require_db()
+    apply(
+        db,
+        sid,
+        {"op": "character_import", "actor": "expert", "build": spec(kind="npc", skills={"observation": 5})},
+        "create",
+    )
+    rolled = apply(db, sid, {"op": "check", "actor": "expert", "skill": "observation"}, "check", seed=5)
+    assert rolled["benefit_budget"]["expert"] >= 1
+    intent = {
+        "op": "check_benefits",
+        "actor": "expert",
+        "check_id": rolled["check_id"],
+        "benefits": ["Identify the next clue"],
+    }
+    apply(db, sid, intent, "claim")
+    before = load(db, sid)
+    with pytest.raises(LoreKitError, match="distinct"):
+        apply(db, sid, intent, "duplicate")
+    assert load(db, sid) == before
+    verify(load(db, sid))
+    db.close()
+
+
+def test_snapshot_tampering_fails_before_next_mutation(make_session):
+    from lorekit.alien.state import KEY, canonical
+
+    sid = make_session(system="alien-evolved")
+    db = require_db()
+    apply(db, sid, {"op": "character_import", "actor": "crew", "build": spec()}, "create")
+    record = load(db, sid)
+    record["state"]["actors"]["crew"]["health"] = 1
+    db.execute("UPDATE session_meta SET value=? WHERE session_id=? AND key=?", (canonical(record), sid, KEY))
+    db.commit()
+    with pytest.raises(LoreKitError, match="digest mismatch"):
+        execute(
+            db, sid, {"op": "stress", "actor": "crew", "amount": 1, "reason": "Must not commit"}, "after-tamper", 1, 1
+        )
+    assert db.execute("SELECT value FROM session_meta WHERE session_id=? AND key=?", (sid, KEY)).fetchone()[
+        0
+    ] == canonical(record)
     db.close()

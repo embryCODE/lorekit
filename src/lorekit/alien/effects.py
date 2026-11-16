@@ -97,12 +97,15 @@ def panic(state: dict, actor_id: str, rng, *, bundle=None, rolled=None) -> dict:
         # Alert radius and resource/item selection are explicit GM choices.
         state["pending"] = {"type": "panic_choice", "actor": actor_id, "result": value}
     else:
+        if 7 <= value <= 9 and any(r >= 10 for r in current):
+            return {**event, "suppressed_by": max(current)}
         if value >= 10:
             stronger = [r for r in current if r >= 10]
             if stronger and max(stronger) > value:
                 # The stronger incompatible enduring response takes precedence.
                 return {**event, "suppressed_by": max(stronger)}
-            current[:] = [r for r in current if r < 10]
+            current[:] = [r for r in current if r < 7]
+            a.pop("skip_turn", None)
         if value not in current:
             current.append(value)
         if value >= 7:
@@ -139,11 +142,82 @@ def drain(state: dict, rng, limit: int = 100, bundle=None) -> list[dict]:
             from lorekit.alien import content
 
             events.append(panic(state, entry["actor"], rng, bundle=bundle or content.read(state["content_hash"])))
+        elif entry["type"] == "trauma_due":
+            a = actor(state, entry["actor"])
+            if eligible(a) and a.get("trauma_hallucination_shift", -1) < entry["shift"]:
+                state["pending"] = entry
+                events.append(
+                    {"type": "hallucination_description_required", "actor": entry["actor"], "shift": entry["shift"]}
+                )
+        elif entry["type"] == "panic_resume":
+            state["pending"] = entry["decision"]
+            events.append({"type": "panic_resumed", "actor": entry["decision"]["actor"]})
+        elif entry["type"] == "signature_resume":
+            from lorekit.alien import content, creatures
+
+            if any(waiting["type"] not in ("signature_resume", "resume_intent") for waiting in state["queue"]):
+                state["queue"].append(entry)
+                events.append({"type": "signature_deferred_until_effects_complete"})
+                continue
+            state["pending"] = {"type": "signature", "execution": entry["execution"]}
+            events.append(creatures.resume(state, bundle or content.read(state["content_hash"]), rng))
+        elif entry["type"] == "resume_intent":
+            from lorekit.alien.engine import transition
+
+            if state["queue"]:
+                state["queue"].append(entry)
+                events.append({"type": "intent_deferred_until_effects_complete"})
+                continue
+            saved = entry["intent"]
+            a = actor(state, saved["actor"])
+            abort = saved["op"] != "end_turn" and (
+                a["dead"]
+                or a.get("stunned")
+                or a.get("skip_turn")
+                or a.get("escape_required")
+                or any(v >= 10 for v in a["panic_responses"])
+            )
+            if abort:
+                events.append({"type": "action_aborted_by_turn_effects", "actor": saved["actor"], "op": saved["op"]})
+                continue
+            try:
+                transition(copy.deepcopy(state), copy.deepcopy(saved), copy.deepcopy(rng))
+            except LoreKitError as exc:
+                events.append({"type": "action_aborted_by_changed_state", "actor": saved["actor"], "reason": str(exc)})
+            else:
+                events.append(transition(state, saved, rng))
+        elif entry["type"] == "communication_power":
+            from lorekit.alien import content, survival
+
+            a = actor(state, entry["actor"])
+            source = a["communication_source"]
+            helper = actor(state, source["actor"])
+            local = bundle or content.read(state["content_hash"])
+            inventory, _ = survival.item(helper, source["item"], local)
+            if inventory.get("dropped"):
+                a["communicating"] = False
+                events.append({"type": "communication_lost", "actor": entry["actor"]})
+            else:
+                events.append(survival.supply(helper, source["item"], local, rng))
+                a["communicating"] = inventory["supply"] > 0
+        elif entry["type"] == "creature_escape":
+            if not actor(state, entry["actor"])["dead"]:
+                state["pending"] = entry
+                events.append(entry.copy())
+        elif entry["type"] == "wounded_escape":
+            a = actor(state, entry["actor"])
+            die = rng.randint(1, 6)
+            a["escape_required"] = die <= 3
+            events.append({"type": "wounded_escape", "actor": entry["actor"], "die": die, "required": die <= 3})
+            if die <= 3:
+                state["pending"] = {"type": "creature_escape", "actor": entry["actor"], "zones": 2, "turn_cost": True}
         elif entry["type"] == "shot_followup":
             from lorekit.alien import combat, content
 
             a = actor(state, entry["actor"])
-            if not entry["simultaneous"] and (a["health"] == 0 or a["dead"]):
+            from lorekit.alien.characters import incapacitated
+
+            if not entry["simultaneous"] and incapacitated(a):
                 events.append({"type": "quick_shot_aborted", "actor": entry["actor"]})
             else:
                 from lorekit.alien import area
@@ -153,7 +227,9 @@ def drain(state: dict, rng, limit: int = 100, bundle=None) -> list[dict]:
         elif entry["type"] == "burst_offer":
             attack = entry["attack"]
             a = actor(state, attack["actor"])
-            if not a["dead"] and a["health"] > 0:
+            from lorekit.alien.characters import incapacitated
+
+            if not incapacitated(a):
                 attack.pop("defer_burst", None)
                 state["pending"] = {"type": "burst", "attack": attack}
                 events.append({"type": "burst_offer", "actor": attack["actor"]})
@@ -284,3 +360,64 @@ def stop_panic(a: dict) -> None:
     a.pop("skip_turn", None)
     a.pop("frenzy_target", None)
     a.pop("safe_flee_zone", None)
+
+
+def horror(state, intent):
+    from lorekit.alien import scenes
+
+    aid, source_id = intent.get("actor"), intent.get("source")
+    a = actor(state, aid)
+    trigger = intent.get("trigger")
+    if trigger in ("first_sight", "adjacent"):
+        source = actor(state, source_id)
+        if source["species"] != "xenomorph" or not scenes.line_of_sight(state, aid, source_id):
+            raise LoreKitError("Horror trigger requires a visible Xenomorph")
+        if trigger == "first_sight":
+            if source_id in a.get("seen_xenomorphs", []):
+                return {"type": "horror_already_seen", "actor": aid, "source": source_id}
+            a.setdefault("seen_xenomorphs", []).append(source_id)
+            source["revealed"] = True
+        elif scenes.range_band(state, aid, source_id) != 0 or intent.get("terrifying") is not True:
+            raise LoreKitError("Adjacent horror requires a terrifying creature at Adjacent range")
+        enqueue_panic(state, aid, trigger)
+    elif trigger == "synthetic_reveal":
+        source = actor(state, source_id)
+        if source["species"] != "synthetic" or not source.get("secret_identity"):
+            raise LoreKitError("Source is not an unrevealed synthetic")
+        source["secret_identity"] = False
+        source["revealed"] = True
+        for witness in state["actors"].values():
+            if witness["zone"] == source["zone"] and witness["zone"] is not None:
+                stress(witness, 1)
+    elif trigger == "crew_attack":
+        actor(state, source_id)
+        if intent.get("same_crew") is not True:
+            raise LoreKitError("Confirm the attacker belongs to the victim's crew")
+        stress(a, 1)
+    elif trigger == "horrifying_event":
+        enqueue_panic(state, aid, intent.get("reason"))
+    else:
+        raise LoreKitError("Unsupported horror trigger")
+    return {"type": "horror_trigger", "trigger": trigger, "actor": aid, "source": source_id}
+
+
+def refresh_overkill(state, aid):
+    from lorekit.alien.characters import incapacitated
+    from lorekit.alien.scenes import line_of_sight
+
+    a = actor(state, aid)
+    if a.get("overkill") and (
+        incapacitated(a)
+        or not any(not incapacitated(actor(state, tid)) and line_of_sight(state, aid, tid) for tid in a["overkill"])
+    ):
+        a.pop("overkill", None)
+
+
+def broken_witnesses(state, aid, before):
+    from lorekit.alien.scenes import line_of_sight
+
+    a = actor(state, aid)
+    if before > 0 and a["health"] == 0 and a["species"] == "human" and a["kind"] == "pc":
+        for other_id, other in sorted(state["actors"].items()):
+            if other_id != aid and eligible(other) and line_of_sight(state, other_id, aid):
+                enqueue_panic(state, other_id, "witnessed_pc_broken")

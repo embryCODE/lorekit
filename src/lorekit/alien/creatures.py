@@ -38,8 +38,10 @@ def build(cid, name, bundle):
         "name": name,
         "species": "xenomorph",
         "kind": "npc",
+        "side": "opposition",
         "content_id": cid,
         "stage": definition.get("stage", "adult"),
+        "size": definition.get("size", "normal"),
         "health": definition["health"],
         "health_max": definition["health"],
         "armor": definition.get("armor", 0),
@@ -109,7 +111,7 @@ def broken(state, aid, rng, definition):
         a["escape_check"] = True
     elif die == 3:
         a["health"] = 1
-        state["pending"] = {"type": "creature_escape", "actor": aid, "zones": 2}
+        state["queue"].append({"type": "creature_escape", "actor": aid, "zones": 2})
     elif die == 4:
         a["last_breath"] = True
     else:
@@ -127,8 +129,11 @@ def act(state, intent, bundle, rng, *, immediate=False):
         or a["species"] != "xenomorph"
         or a["dead"]
         or a.get("frozen")
+        or a.get("attached_to")
     ):
         raise LoreKitError("Creature must be the current living combat actor")
+    if a.get("escape_required"):
+        raise LoreKitError("Wounded creature must use its escape movement this turn")
     if a.get("grappled_by"):
         raise LoreKitError("Grappled creature must attempt escape")
     token = f"hatch:{state['revision']}" if immediate else f"{combat['round']}:{combat['index']}"
@@ -143,6 +148,10 @@ def act(state, intent, bundle, rng, *, immediate=False):
             victim.pop("immobilized_by")
     target_id = intent.get("target")
     target = actor(state, target_id)
+    if target["dead"] or a.get("stage") == "facehugger" and (target["species"] != "human" or target.get("facehug")):
+        raise LoreKitError("Choose a living target; Facehuggers require an uninfected biological host")
+    if scenes.range_band(state, aid, target_id) > 1:
+        raise LoreKitError("Move within Short range before a signature attack")
     followup = a.get("next_signature")
     if followup:
         if followup.get("requires_grapple") and actor(state, followup["target"]).get("grappled_by") != aid:
@@ -185,6 +194,11 @@ def resume(state, bundle, rng):
     execution = p["execution"]
     a, target = actor(state, execution["actor"]), actor(state, execution["target"])
     events = []
+    if a["dead"] or target["dead"]:
+        state["pending"] = None
+        if a.get("last_breath"):
+            a["dead"] = True
+        return {"type": "signature_aborted", "actor": execution["actor"], "reason": "actor_or_target_dead"}
     while execution["index"] < len(execution["actions"]):
         action = execution["actions"][execution["index"]]
         execution["index"] += 1
@@ -244,6 +258,11 @@ def resume(state, bundle, rng):
             )
             for recipient in recipients:
                 effects.enqueue_panic(state, recipient, "signature_attack")
+            if state["queue"]:
+                state["pending"] = None
+                state["queue"].append({"type": "signature_resume", "execution": copy.deepcopy(execution)})
+                events.extend(effects.drain(state, rng, bundle=bundle))
+                return {"type": "signature_effects", "actor": execution["actor"], "events": events}
         elif hook == "grapple":
             target["grappled_by"] = execution["actor"]
             a["grappling"] = execution["target"]
@@ -257,7 +276,10 @@ def resume(state, bundle, rng):
             if target.get("facehug_proof"):
                 events.append({"type": "facehug_blocked", "actor": execution["target"]})
                 continue
+            a["attached_to"] = execution["target"]
+            before_health = target["health"]
             target["health"] = 0
+            effects.broken_witnesses(state, execution["target"], before_health)
             target["unconscious"] = True
             target["facehug"] = {
                 "source": execution["actor"],
@@ -267,7 +289,7 @@ def resume(state, bundle, rng):
             }
             effects.stop_panic(target)
         elif hook == "drop_item":
-            if not any(not i.get("dropped") for i in target["inventory"]):
+            if not any(not i.get("dropped") and i.get("quantity", 0) > 0 for i in target["inventory"]):
                 events.append({"type": "nothing_to_drop", "actor": execution["target"]})
                 continue
             chosen = execution["choices"].get("item")
@@ -286,7 +308,7 @@ def resume(state, bundle, rng):
                 state["pending"] = {"type": "signature_choice", "execution": execution, "choice": "path"}
                 return {"type": "signature_choice", "events": events, "pending": copy.deepcopy(state["pending"])}
             moving = execution["actor"] if action.get("scope", "self") == "self" else execution["target"]
-            if not isinstance(path, list) or len(path) > action.get("zones", 1):
+            if not isinstance(path, list) or not path or len(path) > action.get("zones", 1):
                 raise LoreKitError("Signature movement path is too long")
             for destination in path:
                 events.append(scenes.move(state, moving, destination, bundle, forced=True, rng=rng))
@@ -295,9 +317,13 @@ def resume(state, bundle, rng):
             if hook == "drag":
                 target["prone"] = True
             if hook == "escape":
-                a["hidden"] = True
-                a["revealed"] = False
-                a["escaped"] = True
+                visible = any(
+                    other["kind"] == "pc" and not other["dead"] and scenes.line_of_sight(state, tid, execution["actor"])
+                    for tid, other in state["actors"].items()
+                )
+                if not visible:
+                    a.update(hidden=True, revealed=False, escaped=True)
+                events.append({"type": "signature_escape", "actor": execution["actor"], "escaped": not visible})
         elif hook == "attack":
             dice = integer(action.get("dice"), "signature dice", 1)
             damage = integer(action.get("damage", 1), "signature base damage")
@@ -419,6 +445,7 @@ def infection_event(state, event, bundle, rng):
     definition = bundle["collections"]["creatures"][source["content_id"]]
     if hug["stage"] == "attached":
         source["dead"] = True
+        source.pop("attached_to", None)
         source["health"] = 0
         a["unconscious"] = False
         a["health"] = max(1, a["health"])
@@ -456,8 +483,26 @@ def mature(state, aid, bundle):
     if not definition.get("matures"):
         raise LoreKitError("Missing local adult template for maturation")
     updated = build(definition["matures"], "Mature creature", bundle)
-    for key in ("character_id", "zone", "revealed", "hidden"):
-        updated[key] = a.get(key)
+    for key in (
+        "character_id",
+        "zone",
+        "revealed",
+        "hidden",
+        "adjacent",
+        "side",
+        "grappled_by",
+        "grappling",
+        "acid",
+        "burning",
+        "rads",
+        "hotspot",
+        "radiation_level",
+        "radiation_unit",
+        "radiation_due",
+        "hazards",
+    ):
+        if key in a:
+            updated[key] = copy.deepcopy(a[key])
     state["actors"][aid] = updated
     return {"type": "matured", "actor": aid, "template": definition["matures"]}
 
@@ -486,6 +531,8 @@ def remove_facehugger(state, intent, bundle, rng):
         raise LoreKitError("Removal requires Adjacent range")
     if intent.get("extreme_cold") is not True:
         host.update(dead=True, health=0)
+        actor(state, hug["source"]).pop("attached_to", None)
+        host.pop("facehug")
         return {"type": "fatal_facehugger_removal", "actor": tid}
     if (
         intent.get("stretch_completed") is not True
@@ -514,6 +561,7 @@ def finish_removal(state, result):
     if result["success"]:
         source = actor(state, hug["source"])
         source["frozen"] = True
+        source.pop("attached_to", None)
         source.pop("grappling", None)
         host["unconscious"] = False
         host["health"] = max(1, host["health"])
@@ -527,3 +575,102 @@ def finish_removal(state, result):
         "infected": hug["inseminated"],
         "checks": result["checks"],
     }
+
+
+def move_path(state, intent, bundle, rng):
+    aid = intent.get("actor")
+    a = actor(state, aid)
+    if a["species"] != "xenomorph" or a.get("speed", 0) < 1 or a.get("frozen") or a.get("attached_to"):
+        raise LoreKitError("Multi-zone combat movement requires an active mobile Xenomorph")
+    path = intent.get("path")
+    approach = intent.get("approach")
+    if not isinstance(path, list) or not path or len(path) + int(approach is not None) > 2:
+        raise LoreKitError("Creature movement uses up to two zones, or one zone and an approach")
+    events = []
+    for index, zone in enumerate(path):
+        events.append(scenes.move(state, aid, zone, bundle, forced=index > 0, rng=rng))
+    if approach is not None:
+        target = actor(state, approach)
+        if target["zone"] != a["zone"]:
+            raise LoreKitError("Approach target must be in the arrival zone")
+        a.setdefault("adjacent", []).append(approach)
+        target.setdefault("adjacent", []).append(aid)
+    return {"type": "creature_moved", "actor": aid, "events": events}
+
+
+def escape_decide(state, intent, bundle, rng):
+    p = state["pending"]
+    if not p or p["type"] != "creature_escape" or p["actor"] != intent.get("actor"):
+        raise LoreKitError("No matching creature escape decision")
+    path = intent.get("path")
+    if not isinstance(path, list) or not path or len(path) > 2:
+        raise LoreKitError("Choose a one/two-zone escape path")
+    if p.get("turn_cost"):
+        scenes.spend(state, p["actor"], "quick")
+    events = [scenes.move(state, p["actor"], zone, bundle, forced=True, rng=rng) for zone in path]
+    a = actor(state, p["actor"])
+    visible = any(
+        other["kind"] == "pc" and not other["dead"] and scenes.line_of_sight(state, tid, p["actor"])
+        for tid, other in state["actors"].items()
+    )
+    if not visible and intent.get("route_unclear") is True:
+        a.update(hidden=True, revealed=False, escaped=True)
+    state["pending"] = None
+    return {
+        "type": "creature_escape",
+        "actor": p["actor"],
+        "escaped": a.get("escaped", False),
+        "events": events + effects.drain(state, rng, bundle=bundle),
+    }
+
+
+def lifecycle(state, intent, bundle, rng):
+    aid = intent.get("actor")
+    a = actor(state, aid)
+    reason = intent.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise LoreKitError("Life-cycle pacing requires an explicit GM reason")
+    kind = intent.get("kind")
+    if kind == "cold":
+        if (
+            a.get("stage") not in ("egg", "facehugger")
+            or type(intent.get("active")) is not bool
+            or a.get("attached_to")
+        ):
+            raise LoreKitError(
+                "Cold dormancy/thawing supports eggs and unattached Facehuggers; use the removal procedure for an attached parasite"
+            )
+        a["dormant" if a["stage"] == "egg" else "frozen"] = intent["active"]
+        return {"type": "creature_cold", "actor": aid, "active": intent["active"], "reason": reason}
+    if kind == "stasis":
+        active = intent.get("active")
+        if type(active) is not bool or not a.get("facehug"):
+            raise LoreKitError("Infection stasis requires an infected host and active:true/false")
+        if active and not a.get("infection_stasis"):
+            a["infection_stasis"] = {
+                "remaining": max(0, a["facehug"]["shift_due"] - state["clocks"]["shift"]),
+                "unconscious": a.get("unconscious", False),
+            }
+            a["unconscious"] = True
+        elif not active and a.get("infection_stasis"):
+            paused = a.pop("infection_stasis")
+            a["facehug"]["shift_due"] = state["clocks"]["shift"] + paused["remaining"]
+            a["unconscious"] = paused["unconscious"]
+        return {"type": "infection_stasis", "actor": aid, "active": active, "reason": reason}
+    field = "shift_due" if a.get("facehug") else "mature_due" if "mature_due" in a else None
+    if field is None or a["dead"] or a.get("infection_stasis"):
+        raise LoreKitError("No active life-cycle clock on this actor")
+    owner = a["facehug"] if field == "shift_due" else a
+    if kind == "deadline":
+        owner[field] = integer(intent.get("shift"), "life-cycle due shift", state["clocks"]["shift"])
+        return {"type": "lifecycle_deadline", "actor": aid, "shift": owner[field], "reason": reason}
+    if kind == "resolve":
+        result = (
+            infection_event(state, {"actor": aid, "kind": "shift"}, bundle, rng)
+            if field == "shift_due"
+            else mature(state, aid, bundle)
+        )
+        result["reason"] = reason
+        result["events"] = result.get("events", []) + effects.drain(state, rng, bundle=bundle)
+        return result
+    raise LoreKitError("Choose deadline, resolve or infection stasis")

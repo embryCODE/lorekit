@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from lorekit.alien import effects
-from lorekit.alien.characters import ATTRIBUTES, SKILLS, talents
+from lorekit.alien.characters import ATTRIBUTES, SKILLS, incapacitated, talents
 from lorekit.alien.dice import PoolRoll, skill_roll
 from lorekit.alien.state import actor, integer
 from lorekit.db import LoreKitError
@@ -33,6 +33,29 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
     skill = spec.get("skill")
     if skill not in SKILLS and skill not in ATTRIBUTES:
         raise LoreKitError("Unknown skill or attribute")
+    if a["species"] == "xenomorph" and "_base_dice" not in spec and skill not in a["skills"]:
+        raise LoreKitError("Creature has no supported rating for this skill; use its signature actions")
+    if (
+        a.get("trauma_traits", {}).get("cannot_speak")
+        and skill in ("command", "manipulation")
+        and spec.get("nonverbal") is not True
+    ):
+        raise LoreKitError("Speech loss requires an explicitly nonverbal social action")
+    if spec.get("_attribute_only"):
+        pool = skill_roll(rng, attribute=a["attributes"][skill], skill=0, stress=0)
+        return {
+            "actor": spec["actor"],
+            "attribute": skill,
+            "skill": skill,
+            "passive": False,
+            "no_push": True,
+            "attribute_only": True,
+            "roll": {key: list(value) for key, value in asdict(pool).items()},
+            "pushes": 0,
+            "forced_failure": False,
+            "events": [],
+            "story_dice": [],
+        }
     modifier_from_substitution = 0
     for effect in talents(a, bundle):
         if (
@@ -45,7 +68,7 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
             modifier_from_substitution += effect.get("value", 0)
     attribute = spec.get("attribute", SKILLS.get(skill, skill))
     if "attribute" not in spec:
-        for effect in talents(a, bundle):
+        for effect in sorted(talents(a, bundle), key=lambda e: e.get("context") is not None):
             if (
                 effect["hook"] == "attribute_override"
                 and effect["skill"] == skill
@@ -64,7 +87,7 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
         raise LoreKitError("Up to three distinct other helpers are allowed")
     for hid in helpers:
         helper = actor(state, hid)
-        if helper["dead"] or helper["health"] == 0 or 5 in helper["panic_responses"] or 5 in a["panic_responses"]:
+        if incapacitated(helper) or 5 in helper["panic_responses"] or 5 in a["panic_responses"]:
             raise LoreKitError("Helper cannot currently provide help")
         if helper["zone"] != a["zone"] and not spec.get("remote_help", False):
             raise LoreKitError("Remote help requires an explicit GM declaration")
@@ -77,9 +100,13 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
     from lorekit.alien.survival import item
 
     used_gear = []
+    gear_two_hands = False
     for instance_id in gear:
         instance, definition = item(a, instance_id, bundle)
-        if instance.get("dropped"):
+        gear_two_hands |= definition.get("hands", 1) > 1
+        if 3 in a.get("system_damage", []) and definition.get("hands", 1) > 1:
+            raise LoreKitError("Damaged arm servos allow only one-handed gear")
+        if instance.get("dropped") or instance.get("quantity", 1) <= 0:
             raise LoreKitError("Gear is not available")
         modifiers = [
             e["value"]
@@ -91,6 +118,8 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
         modifier += sum(modifiers)
         if definition.get("single_use"):
             used_gear.append(instance)
+    if a.get("dose_penalty_shift") == state["clocks"]["shift"]:
+        modifier -= a.get("dose_penalty", 0)
     modifier += modifier_from_substitution
     if state["scene"] and a["zone"] is not None and state["scene"]["zones"][a["zone"]].get("zero_g"):
         immune = any(e["hook"] == "zero_g_immunity" for e in talents(a, bundle))
@@ -116,7 +145,7 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
     for injury in a["injuries"]:
         for effect in injury["effects"]:
             if effect["hook"] == "injury_modifier" and skill in effect.get("skills", []):
-                if effect.get("condition") and not spec.get(effect["condition"], False):
+                if effect.get("condition") and not (spec.get(effect["condition"], False) or gear_two_hands):
                     continue
                 modifier += effect["value"]
     if effects.STRESS_ATTRIBUTE[attribute] in a["stress_responses"]:
@@ -126,6 +155,7 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
             effect["hook"] == "skill_modifier"
             and effect["context"] == spec.get("context")
             and skill in effect.get("skills", [skill])
+            and (effect.get("attribute") is None or effect["attribute"] == attribute)
         ):
             modifier += effect["value"]
     # Action spending occurs only on the detached transaction copy.
@@ -133,7 +163,17 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
         from lorekit.alien.scenes import spend
 
         for hid in helpers:
-            spend(state, hid, "full", out_of_turn=True)
+            helper = actor(state, hid)
+            offer = helper.get("help_offer")
+            if (
+                offer
+                and offer["actor"] == spec["actor"]
+                and offer["skill"] in (skill, spec.get("skill"))
+                and offer["round"] == state["combat"]["round"]
+            ):
+                helper.pop("help_offer")
+            else:
+                spend(state, hid, "full", out_of_turn=True)
     omit = integer(spec.get("omit_stress", 0), "omit_stress", 0, 2)
     allowed_omit = max([0] + [e["value"] for e in talents(a, bundle) if e["hook"] == "omit_stress"])
     if omit > allowed_omit:
@@ -230,6 +270,7 @@ def advance(state: dict, bundle: dict) -> dict:
         a = actor(state, check["actor"])
         can_story = (
             not check["forced_failure"]
+            and not check.get("attribute_only")
             and a["kind"] == "pc"
             and a["story_points"] > 0
             and any(d != 6 for d in check["roll"]["base"])
@@ -247,8 +288,41 @@ def advance(state: dict, bundle: dict) -> dict:
         "open": p["open"],
         "continuation": p["continuation"],
     }
+    if p["continuation"] is None:
+        budgets = {}
+        for index, check in enumerate(p["checks"]):
+            net = values[index] - (values[1 - index] if len(values) == 2 else 0)
+            available = max(0, net - 1)
+            actor(state, check["actor"])["narrative_successes"] = {
+                "check_id": p["id"],
+                "remaining": available,
+                "benefits": [],
+            }
+            budgets[check["actor"]] = available
+        result["benefit_budget"] = budgets
+        result["check_id"] = p["id"]
     state["pending"] = None
     return result
+
+
+def benefits(state, intent):
+    a = actor(state, intent.get("actor"))
+    balance = a.get("narrative_successes")
+    claims = intent.get("benefits")
+    if not balance or balance["check_id"] != intent.get("check_id"):
+        raise LoreKitError("No matching completed generic check")
+    if (
+        not isinstance(claims, list)
+        or not claims
+        or any(not isinstance(v, str) or not v.strip() for v in claims)
+        or len(set(claims)) != len(claims)
+        or len(claims) > balance["remaining"]
+        or set(claims) & set(balance["benefits"])
+    ):
+        raise LoreKitError("Record distinct GM benefits within the remaining extra-success budget")
+    balance["remaining"] -= len(claims)
+    balance["benefits"].extend(claims)
+    return {"type": "narrative_benefits", "actor": intent["actor"], **balance}
 
 
 def decide(state: dict, intent: dict, bundle: dict, rng) -> dict:

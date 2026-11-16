@@ -51,3 +51,19 @@ def test_radiation_accumulates_without_armor_and_recovers_after_leaving():
     environment.act(s, {"action": "leave_radiation", "actor": "crew"}, b, Sixes())
     survival.advance_time(s, "shift", 1)
     assert a["rads"] == 0
+
+
+def test_decompression_vents_in_order_and_checks_precede_actions():
+    from lorekit.alien.engine import complete_check
+
+    s, b = setup()
+    environment.breach(s, ["safe", "fire"])
+    assert not s["scene"]["vents"]["safe"]["vacuum"]
+    survival.advance_time(s, "stretch", 1)
+    assert s["scene"]["vents"]["safe"]["vacuum"]
+    assert not s["scene"]["vents"]["fire"]["vacuum"]
+    # Install no-check content provenance for the preview transition.
+    result = environment.pressure_guard(s, {"op": "check", "actor": "crew", "skill": "comtech"}, b, random.Random(1))
+    assert s["pending"]["continuation"]["kind"] == "pressure"
+    assert s["actors"]["crew"]["stress"] == 1
+    assert s["actors"]["crew"]["vacuum_checks"] == 1

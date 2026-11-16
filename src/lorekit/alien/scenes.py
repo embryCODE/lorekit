@@ -24,11 +24,16 @@ def setup(state, spec):
             "zero_g",
             "flammable",
             "floor_armor",
+            "outer_armor",
+            "auto_seal",
+            "body_temperature",
+            "capacity",
         }:
             raise LoreKitError("Unsupported zone property")
-        if "floor_armor" in zone:
-            integer(zone["floor_armor"], "floor armor")
-        if any(type(v) is not bool for k, v in zone.items() if k != "floor_armor"):
+        for surface in ("floor_armor", "outer_armor", "capacity"):
+            if surface in zone:
+                integer(zone[surface], surface)
+        if any(type(v) is not bool for k, v in zone.items() if k not in ("floor_armor", "outer_armor", "capacity")):
             raise LoreKitError("Zone flags must be boolean")
     if not isinstance(borders, list):
         raise LoreKitError("borders must be a list")
@@ -45,6 +50,8 @@ def setup(state, spec):
             "armor",
             "health",
             "electronic",
+            "ends",
+            "blockers",
         }:
             raise LoreKitError("Invalid scene border")
         if b.get("a") not in zones or b.get("b") not in zones or b["a"] == b["b"]:
@@ -53,24 +60,62 @@ def setup(state, spec):
         if pair in seen:
             raise LoreKitError("Duplicate border")
         seen.add(pair)
+        if "ends" in b and (
+            not isinstance(b["ends"], dict)
+            or any(z not in (b["a"], b["b"]) or end not in ("head", "tail") for z, end in b["ends"].items())
+        ):
+            raise LoreKitError("Invalid crawlspace border ends")
+        if "blockers" in b:
+            if not isinstance(b["blockers"], list) or any(bid not in state["actors"] for bid in b["blockers"]):
+                raise LoreKitError("Invalid passage blockers")
         for number in ("armor", "health"):
             if number in b:
                 integer(b[number], "door " + number)
-        if any(type(b[k]) is not bool for k in set(b) - {"a", "b", "armor", "health"}):
+        if any(type(b[k]) is not bool for k in set(b) - {"a", "b", "armor", "health", "ends", "blockers"}):
             raise LoreKitError("Border flags must be boolean")
     sight = spec.get("sight", [])
     if not isinstance(sight, list) or any(
         not isinstance(pair, list) or len(pair) != 2 or pair[0] not in zones or pair[1] not in zones for pair in sight
     ):
         raise LoreKitError("sight must contain zone pairs with a GM-confirmed clear line")
+    for current in state["actors"].values():
+        current["adjacent"] = []
     for aid, zid in spec.get("placements", {}).items():
         a = actor(state, aid)
         if zid not in zones:
             raise LoreKitError("Unknown placement zone")
         a["zone"] = zid
         a["adjacent"] = []
+    if any(a["zone"] is not None and a["zone"] not in zones for a in state["actors"].values()):
+        raise LoreKitError("Reposition actors whose old zone is absent from the replacement scene")
+    crawl_order = copy.deepcopy(spec.get("crawl_order", {}))
+    if not isinstance(crawl_order, dict) or set(crawl_order) - set(zones):
+        raise LoreKitError("Invalid crawlspace order map")
+    for zone, definition in zones.items():
+        if definition.get("crawlspace"):
+            occupants = [aid for aid, a in state["actors"].items() if a["zone"] == zone]
+            order = crawl_order.setdefault(zone, occupants if len(occupants) <= 1 else [])
+            if not isinstance(order, list) or len(set(order)) != len(order) or set(order) != set(occupants):
+                raise LoreKitError("Declare every crawlspace occupant in head-to-tail order")
+    objects = copy.deepcopy(spec.get("objects", {}))
+    if not isinstance(objects, dict):
+        raise LoreKitError("Scene objects must be keyed by stable ID")
+    for key, obj in objects.items():
+        if (
+            not isinstance(key, str)
+            or not key
+            or not isinstance(obj, dict)
+            or set(obj) - {"zone", "description", "content_id", "found"}
+            or obj.get("zone") not in zones
+            or not isinstance(obj.get("description"), str)
+            or type(obj.get("found", False)) is not bool
+        ):
+            raise LoreKitError("Invalid scene object")
+        obj.setdefault("found", False)
     state["scene"] = {
         "zones": copy.deepcopy(zones),
+        "crawl_order": crawl_order,
+        "objects": objects,
         "borders": copy.deepcopy(borders),
         "phase": "pc",
         "sight": copy.deepcopy(sight),
@@ -120,7 +165,7 @@ def distance(state, start, end):
 
 def line_of_sight(state, aid, bid):
     a, b = actor(state, aid), actor(state, bid)
-    if a["zone"] is None or b["zone"] is None or b["hidden"] or b.get("cover") == "full":
+    if a.get("unconscious") or a["zone"] is None or b["zone"] is None or b["hidden"] or b.get("cover") == "full":
         return False
     if a["zone"] == b["zone"]:
         return True
@@ -156,6 +201,8 @@ def start_combat(state, intent, rng, bundle=None):
         x not in participants or actor(state, x)["kind"] != "npc" for x in flattened
     ):
         raise LoreKitError("Initiative groups require distinct participating NPCs")
+    if any(len({actor(state, aid).get("speed", 1) for aid in group}) != 1 for group in groups):
+        raise LoreKitError("NPC initiative groups require matching Speed ratings")
     units = [list(g) for g in groups] + [[aid] for aid in participants if aid not in flattened]
     state["combat"] = {"actors": participants[:], "units": units, "round": 0, "slots": [], "index": 0, "budgets": {}}
     state["mode"] = "combat"
@@ -165,31 +212,49 @@ def start_combat(state, intent, rng, bundle=None):
             if injury["interval"] == "round" and not injury["stabilized"]:
                 injury["due_unit"] = "turn"
                 injury["due"] = a.get("turns_completed", 0) + 1
-    surprise = intent.get("surprise", [])
-    for aid in surprise:
-        actor(state, aid)["ambush_targets"] = [tid for tid in participants if tid not in surprise]
+    ambush = intent.get("ambush", [])
+    surprise = list(dict.fromkeys(intent.get("surprise", []) + ambush))
+    for aid in ambush:
+        actor(state, aid)["ambush_targets"] = [tid for tid in participants if tid not in ambush]
     draw_round(state, rng, surprise, bundle)
-    prepare_turn(state)
     return {"type": "combat_started", "combat": copy.deepcopy(state["combat"])}
 
 
 def draw_round(state, rng, surprise=None, bundle=None):
     combat = state["combat"]
     expanded = []
-    for unit in combat["units"]:
+    for original in combat["units"]:
+        unit = [aid for aid in original if not actor(state, aid)["dead"] and not actor(state, aid).get("escaped")]
+        if not unit:
+            continue
         speed = actor(state, unit[0]).get("speed", 1)
         for _ in range(speed):
             expanded.append(unit)
     if not expanded:
-        raise LoreKitError("Combat needs at least one actor with an initiative turn")
+        if combat["round"] == 0:
+            raise LoreKitError("Combat needs an actor with an initiative turn")
+        finish_combat(state)
+        return
     if len(expanded) > 10:
         raise LoreKitError("More than ten initiative draws: group NPCs or record a ruling")
     if combat["round"] > 0 and state["options"]["fixed_initiative"]:
+        remaining = copy.deepcopy(expanded)
+        kept = []
+        for slot in combat["slots"]:
+            if slot["actors"] in remaining:
+                kept.append(slot)
+                remaining.remove(slot["actors"])
+        deck = [card for card in range(1, 11) if card not in {slot["card"] for slot in kept}]
+        rng.shuffle(deck)
+        for unit in remaining:
+            kept.append({"card": deck.pop(), "actors": unit})
+        combat["slots"] = sorted(kept, key=lambda slot: slot["card"])
         combat["index"] = 0
         combat["round"] += 1
         combat["budgets"] = {aid: {"full": False, "quick": 0} for aid in combat["actors"]}
         for aid in combat["actors"]:
             actor(state, aid).pop("moved_this_round", None)
+            actor(state, aid)["orders"] = []
         return
     if bundle:
         from lorekit.alien import initiative
@@ -235,7 +300,7 @@ def draw_round(state, rng, surprise=None, bundle=None):
 
 
 def spend(state, aid, action, *, out_of_turn=False, escape=False, grapple_attack=False):
-    if state["mode"] != "combat":
+    if state["mode"] != "combat" or actor(state, aid).get("escaped"):
         return
     combat = state["combat"]
     if aid not in combat["actors"]:
@@ -246,18 +311,25 @@ def spend(state, aid, action, *, out_of_turn=False, escape=False, grapple_attack
     if a.get("grappling") and not grapple_attack:
         raise LoreKitError("Grappler may only attack its held target or release")
     if a["species"] == "xenomorph":
+        if a.get("frozen") or a.get("attached_to") or a.get("speed", 1) == 0:
+            raise LoreKitError("Creature cannot act while attached, frozen or immobile")
+        if a.get("last_breath"):
+            raise LoreKitError("Last Breath permits only its final signature attack")
         if out_of_turn or aid not in combat["slots"][combat["index"]]["actors"]:
             raise LoreKitError("Creature cannot interrupt or act outside its slot")
         token = f"{combat['round']}:{combat['index']}"
         if a.get("acted_slot") == token or a["dead"]:
             raise LoreKitError("Creature slot action unavailable")
         a["acted_slot"] = token
+        for victim in state["actors"].values():
+            if victim.get("immobilized_by") == aid:
+                victim.pop("immobilized_by")
         return
     if a["species"] == "human" and a["health"] == 0:
         raise LoreKitError("Broken human can only make one movement per round")
     if a.get("shutdown") or 5 in a.get("system_damage", []):
         raise LoreKitError("Synthetic is immobilized or shut down")
-    if a["dead"] or a.get("stunned") or a.get("skip_turn") or 12 in a["panic_responses"]:
+    if a["dead"] or a.get("unconscious") or a.get("stunned") or a.get("skip_turn") or 12 in a["panic_responses"]:
         raise LoreKitError("Actor cannot currently act")
     if not out_of_turn and any(r in a["panic_responses"] for r in (10, 11)):
         raise LoreKitError("Flee/Frenzy permits only its forced action until panic stops")
@@ -269,6 +341,8 @@ def spend(state, aid, action, *, out_of_turn=False, escape=False, grapple_attack
         raise LoreKitError("Invalid action cost")
     if action == "quick" and 4 in a.get("system_damage", []):
         action = "full"
+    if out_of_turn and action == "full" and aid not in combat["slots"][combat["index"]]["actors"]:
+        raise LoreKitError("A full action cannot interrupt another actor's turn")
     b = combat["budgets"][aid]
     if action == "full":
         if b["full"] or b["quick"] >= 2:
@@ -284,6 +358,8 @@ def hold_off(state, aid, card):
     combat = state["combat"]
     if not combat or aid not in combat["slots"][combat["index"]]["actors"]:
         raise LoreKitError("Only the current actor can hold off")
+    if actor(state, aid).get("entered_turn") == f"{combat['round']}:{combat['index']}":
+        raise LoreKitError("Hold off before beginning turn effects or actions")
     current = combat["slots"][combat["index"]]
     later = next((s for s in combat["slots"][combat["index"] + 1 :] if s["card"] == card), None)
     if later is None:
@@ -296,10 +372,18 @@ def move(state, aid, destination, bundle, *, forced=False, rng=None, zero_g_chec
     a = actor(state, aid)
     if a.get("immobilized_by") and not actor(state, a["immobilized_by"])["dead"]:
         raise LoreKitError("A creature tail hold prevents movement")
-    if not forced and (a["dead"] or a.get("stunned") or a.get("unconscious") or a.get("shutdown")):
+    if not forced and (
+        a["dead"]
+        or a.get("stunned")
+        or a.get("unconscious")
+        or a.get("shutdown")
+        or a.get("frozen")
+        or a.get("attached_to")
+        or a["species"] == "xenomorph"
+        and a.get("speed", 1) == 0
+    ):
         raise LoreKitError("Actor cannot move voluntarily")
-    if not traversable(border(state, a["zone"], destination)):
-        raise LoreKitError("No traversable border to destination")
+    edge = route(state, aid, destination)
     if destination in state["scene"].get("fires", {}) and rng is None:
         raise LoreKitError("Moving into fire requires the environmental resolver")
     zero_g = state["scene"]["zones"][a["zone"]].get("zero_g")
@@ -334,8 +418,26 @@ def move(state, aid, destination, bundle, *, forced=False, rng=None, zero_g_chec
     a["adjacent"] = []
     a["hidden"] = False
     a["cover"] = None
+    order = state["scene"].setdefault("crawl_order", {})
+    if a["zone"] in order and aid in order[a["zone"]]:
+        order[a["zone"]].remove(aid)
+    if state["scene"]["zones"][destination].get("crawlspace"):
+        target_order = order.setdefault(destination, [])
+        target_order.insert(0 if edge["ends"][destination] == "head" else len(target_order), aid)
+    for border_entry in state["scene"]["borders"]:
+        if aid in border_entry.get("blockers", []):
+            border_entry["blockers"].remove(aid)
+    a.pop("passed", None)
     a["zone"] = destination
-    key = "moved_this_round" if state["mode"] == "combat" else "moved_this_stretch"
+    for parasite_id, parasite in state["actors"].items():
+        if parasite.get("attached_to") == aid:
+            for other in state["actors"].values():
+                if parasite_id in other.get("adjacent", []):
+                    other["adjacent"].remove(parasite_id)
+            parasite["zone"] = destination
+            parasite["adjacent"] = [aid]
+            a.setdefault("adjacent", []).append(parasite_id)
+    key = "moved_this_round" if state["mode"] == "combat" and not a.get("escaped") else "moved_this_stretch"
     if weight > limit:
         effects.stress(a, 1)
     a[key] = True
@@ -355,6 +457,8 @@ def end_turn(state, aid, rng, bundle=None):
         raise LoreKitError("Only the current actor can end its turn")
     for current in combat["slots"][combat["index"]]["actors"]:
         a = actor(state, current)
+        if a.get("last_breath") and not a["dead"]:
+            raise LoreKitError("Resolve the final Last Breath signature before ending the turn")
         a["turns_completed"] = a.get("turns_completed", 0) + 1
         for injury in a["injuries"]:
             if (
@@ -365,6 +469,7 @@ def end_turn(state, aid, rng, bundle=None):
             ):
                 state["queue"].append({"type": "due", "kind": "death", "actor": current, "injury": injury["id"]})
                 injury["due"] = a["turns_completed"] + 1
+        effects.refresh_overkill(state, current)
         if a.get("overkill"):
             visible = [
                 tid
@@ -378,6 +483,7 @@ def end_turn(state, aid, rng, bundle=None):
             if not visible or a["health"] == 0:
                 a.pop("overkill", None)
             a.pop("overkill_attacked", None)
+        a.pop("escape_required", None)
         a.pop("skip_turn", None)
         a.pop("interrupt_blocked", None)
         a["panic_responses"] = [r for r in a["panic_responses"] if r not in (7, 8, 9)]
@@ -395,13 +501,12 @@ def end_turn(state, aid, rng, bundle=None):
         events.extend(creatures.egg_round(state, bundle, rng))
         survival.due_events(state, "round")
         draw_round(state, rng, bundle=bundle)
-    prepare_turn(state)
     events = locals().get("events", [])
     events.extend(effects.drain(state, rng, bundle=bundle))
-    return {"type": "turn_ended", "combat": copy.deepcopy(combat), "events": events}
+    return {"type": "turn_ended", "combat": copy.deepcopy(state["combat"]), "events": events}
 
 
-def approach(state, aid, target_id, bundle=None):
+def approach(state, aid, target_id, bundle=None, *, paid=False):
     a, target = actor(state, aid), actor(state, target_id)
     if aid == target_id or a["zone"] is None or a["zone"] != target["zone"]:
         raise LoreKitError("Approach requires another actor in the same zone")
@@ -414,7 +519,8 @@ def approach(state, aid, target_id, bundle=None):
     movement_full = 2 in a.get("system_damage", []) or any(
         e["hook"] == "movement_full" for i in a["injuries"] for e in i["effects"]
     )
-    spend(state, aid, "full" if movement_full else "quick")
+    if not paid:
+        spend(state, aid, "full" if movement_full else "quick")
     a.setdefault("adjacent", [])
     target.setdefault("adjacent", [])
     if target_id not in a["adjacent"]:
@@ -424,19 +530,24 @@ def approach(state, aid, target_id, bundle=None):
     return {"type": "approached", "actor": aid, "target": target_id}
 
 
-def prepare_turn(state):
-    if state["pending"] is not None:
+def prepare_turn(state, only=None):
+    if state["pending"] is not None or state["combat"] is None:
         return
     combat = state["combat"]
     for aid in combat["slots"][combat["index"]]["actors"]:
+        if only is not None and aid != only:
+            continue
         a = actor(state, aid)
         from lorekit.alien.creatures import egg_adjacent
+        from lorekit.alien.effects import refresh_overkill
 
-        if a.get("overkill") and not any(
-            not actor(state, tid)["dead"] and actor(state, tid)["health"] > 0 and line_of_sight(state, aid, tid)
-            for tid in a["overkill"]
-        ):
-            a.pop("overkill", None)
+        refresh_overkill(state, aid)
+        if a["species"] == "xenomorph" and not a["dead"]:
+            if a.get("rise_next_turn"):
+                a["health"] = 1
+                a.pop("rise_next_turn")
+            if a.get("escape_check"):
+                state["queue"].append({"type": "wounded_escape", "actor": aid})
         egg_adjacent(state, aid)
         if not a["dead"] and any(r in a["panic_responses"] for r in (10, 11)):
             state["queue"].append(
@@ -449,3 +560,69 @@ def prepare_turn(state):
             and (a["health"] > 0 or a["species"] == "synthetic")
         ):
             state["queue"].append({"type": "due", "kind": "stun_recovery", "actor": aid})
+
+
+def route(state, aid, destination):
+    """Validate GM-declared passage geometry, including ordered crawlspaces."""
+    a = actor(state, aid)
+    edge = border(state, a["zone"], destination)
+    if not traversable(edge):
+        raise LoreKitError("No traversable border to destination")
+    for bid in edge.get("blockers", []):
+        blocker = actor(state, bid)
+        if bid != aid and not blocker["dead"] and blocker["health"] > 0 and bid not in a.get("passed", []):
+            raise LoreKitError("A character blocks this passage; pass them with a special attack or permission")
+    source = a["zone"]
+    if state["scene"]["zones"][source].get("crawlspace"):
+        order = state["scene"].get("crawl_order", {}).get(source, [])
+        end = edge.get("ends", {}).get(source)
+        if end not in ("head", "tail") or aid not in order:
+            raise LoreKitError("Declare crawlspace ordering and the exit end")
+        if aid != (order[0] if end == "head" else order[-1]):
+            raise LoreKitError("Cannot move past another character in a crawlspace")
+    if state["scene"]["zones"][destination].get("crawlspace"):
+        if edge.get("ends", {}).get(destination) not in ("head", "tail"):
+            raise LoreKitError("Declare the crawlspace entry end")
+        capacity = state["scene"]["zones"][destination].get("capacity")
+        if capacity is not None and len(state["scene"].get("crawl_order", {}).get(destination, [])) >= capacity:
+            raise LoreKitError("No room to enter this crawlspace")
+    return edge
+
+
+def enter_combat(state, intent, bundle, rng):
+    if state["combat"] is None:
+        return start_combat(state, intent, rng, bundle)
+    # Beta 2 does not specify reinforcements' initiative. B18: join next round,
+    # preserving all cards/action budgets already used in the current round.
+    joined = []
+    for aid in intent["actors"]:
+        a = actor(state, aid)
+        a.pop("escaped", None)
+        if aid not in state["combat"]["actors"]:
+            state["combat"]["actors"].append(aid)
+            state["combat"]["units"].append([aid])
+            state["combat"]["budgets"][aid] = {"full": False, "quick": 0}
+            joined.append(aid)
+    for aid in intent.get("ambush", []):
+        actor(state, aid)["ambush_targets"] = [tid for tid in intent["actors"] if tid not in intent["ambush"]]
+    return {"type": "combat_joined", "actors": joined, "initiative": "next_round", "ruling": "B18"}
+
+
+def finish_combat(state):
+    for a in state["actors"].values():
+        a.pop("escaped", None)
+        for injury in a["injuries"]:
+            if injury.get("due_unit") == "turn":
+                injury["due_unit"] = "round"
+                injury["due"] = state["clocks"]["round"] + 1
+    state["combat"] = None
+    state["mode"] = "stealth"
+
+
+def movement_cost(a):
+    return (
+        "full"
+        if 2 in a.get("system_damage", [])
+        or any(e["hook"] == "movement_full" for i in a["injuries"] for e in i["effects"])
+        else "quick"
+    )

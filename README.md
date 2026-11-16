@@ -162,6 +162,14 @@ lorekit/
 
 ## Game Systems
 
+LoreKit also includes the `dnd55e` backend and an experimental `alien-evolved`
+backend. Alien currently targets **Evolved Edition Beta 2**, requires local
+reference content, and uses the `alien_*` tools. Its rules are implemented in
+`src/lorekit/alien/`; it is not a cruncher JSON system pack. See
+[Alien setup and content boundaries](docs/alien-content.md) and
+[the Alien GM workflow](guidelines/GM_GUIDE.md#13-alien-evolved-beta-2-sessions-alien-evolved).
+Vehicles, spacecraft, campaign advancement and Last Survivor are deferred.
+
 LoreKit ships with two system packs under `systems/`:
 
 | Directory | System                   | License  |

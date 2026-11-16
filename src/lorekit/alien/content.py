@@ -96,7 +96,7 @@ def validate(bundle: dict) -> dict:
                 validate_effect(effect)
                 hook = effect["hook"]
                 if hook in ("health_bonus", "resolve_bonus", "carry_multiplier", "supply_reduction"):
-                    integer(effect.get("value"), "effect value", 0, 10)
+                    integer(effect.get("value"), "effect value", 1, 10)
                 if hook == "push_attribute" and effect.get("attribute") not in (
                     "strength",
                     "agility",
@@ -261,11 +261,22 @@ def validate(bundle: dict) -> dict:
                     "single_use",
                     "category",
                     "explosive",
+                    "hands",
+                    "cutting_torch",
+                    "consume",
+                    "dose_group",
                 }
                 if set(entry) - known:
                     raise LoreKitError("Unsupported item property")
                 if effects:
                     raise LoreKitError("Item effect hooks are not installed; use supported item fields")
+                if "consume" in entry:
+                    from lorekit.alien.consumables import KINDS
+
+                    if entry["consume"] not in KINDS:
+                        raise LoreKitError("Unsupported consumption/medication effect")
+                if "dose_group" in entry and (not isinstance(entry["dose_group"], str) or not entry["dose_group"]):
+                    raise LoreKitError("Dose group must be a nonempty local identifier")
                 modifiers = entry.get("check_modifiers", [])
                 if not isinstance(modifiers, list):
                     raise LoreKitError("Item check_modifiers must be a list")
@@ -279,6 +290,8 @@ def validate(bundle: dict) -> dict:
                         or not isinstance(modifier.get("context"), str)
                     ):
                         raise LoreKitError("Invalid contextual item modifier")
+                if "hands" in entry:
+                    integer(entry["hands"], "required hands", 0, 2)
                 if "category" in entry and entry["category"] not in ("pistol", "rifle", "heavy", "melee"):
                     raise LoreKitError("Unknown weapon category")
                 if "damage" in entry:
@@ -287,14 +300,23 @@ def validate(bundle: dict) -> dict:
                     integer(entry.get("maximum", 0), "maximum range", entry.get("minimum", 0), 4)
                     if type(entry.get("modifier", 0)) is not int:
                         raise LoreKitError("weapon modifier must be integer")
-                for flag in ("piercing", "full_auto", "aim_required", "unreliable", "single_shot", "stun", "explosive"):
+                for flag in (
+                    "piercing",
+                    "full_auto",
+                    "aim_required",
+                    "unreliable",
+                    "single_shot",
+                    "stun",
+                    "explosive",
+                    "single_use",
+                ):
                     if flag in entry and type(entry[flag]) is not bool:
                         raise LoreKitError("weapon flags must be boolean")
                 if "armor" in entry:
                     integer(entry["armor"], "armor level")
                 if "tracker_range" in entry:
                     integer(entry["tracker_range"], "tracker range", 1)
-                for flag in ("acid_proof", "facehug_proof", "vacuum_proof"):
+                for flag in ("acid_proof", "facehug_proof", "vacuum_proof", "cutting_torch"):
                     if flag in entry and type(entry[flag]) is not bool:
                         raise LoreKitError("Item protection flags must be boolean")
                 weight = entry.get("weight", 1)
@@ -311,6 +333,8 @@ def validate(bundle: dict) -> dict:
                 if len(entry["skills"]) != 3 or not set(entry["skills"]) <= set(SKILLS):
                     raise LoreKitError("Career requires three valid key skills")
             if family == "creatures":
+                if effects:
+                    raise LoreKitError("Creature abilities require supported fields or signature hooks")
                 allowed = {
                     "page",
                     "effects",
@@ -321,6 +345,7 @@ def validate(bundle: dict) -> dict:
                     "acid",
                     "early_stage",
                     "stage",
+                    "size",
                     "spawn",
                     "birth",
                     "matures",
@@ -330,6 +355,10 @@ def validate(bundle: dict) -> dict:
                 }
                 if set(entry) - allowed:
                     raise LoreKitError("Unsupported creature property")
+                if entry.get("size", "normal") not in ("small", "normal", "large"):
+                    raise LoreKitError("Unsupported creature size")
+                if entry.get("stage", "adult") not in ("egg", "facehugger", "chestburster", "adult"):
+                    raise LoreKitError("Unsupported creature stage")
                 for number in ("acid", "armor_fire", "stealth_penalty"):
                     if number in entry:
                         integer(entry[number], f"creature {number}")
@@ -473,7 +502,7 @@ def validate_effect(effect):
         "health_bonus": {"value"},
         "resolve_bonus": {"value"},
         "push_attribute": {"attribute"},
-        "skill_modifier": {"value", "skills", "context"},
+        "skill_modifier": {"value", "skills", "context", "attribute"},
         "supply_reduction": {"value", "resource"},
         "carry_multiplier": {"value"},
         "stress_gain": {"value"},

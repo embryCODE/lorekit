@@ -155,7 +155,7 @@ def alien_scene_setup(session_id: int, scene: str, request_id: str, expected_rev
 def alien_combat_start(
     session_id: int, combat: str, request_id: str, expected_revision: int, seed: int | None = None
 ) -> str:
-    """GM-only: draw initiative for {actors:[actor IDs],groups?:[[NPC IDs]],surprise?:[actor IDs]}."""
+    """GM-only: draw initiative for {actors:[actor IDs],groups?:[[NPC IDs]],surprise?:[actor IDs],ambush?:[actor IDs]}."""
     return _json_command(session_id, combat, "combat_start", request_id, expected_revision, seed)
 
 
@@ -183,6 +183,9 @@ def alien_combat_act(
             "attack",
             "action",
             "creature_act",
+            "creature_move",
+            "leave_combat",
+            "creature_escape_decide",
             "egg_release",
             "facehugger_remove",
             "signature_decide",
@@ -200,6 +203,7 @@ def alien_combat_act(
             "overkill_decide",
             "area_defense",
             "end_turn",
+            "begin_turn",
             "queue_continue",
         }:
             raise LoreKitError("Unsupported combat intent")
@@ -270,7 +274,15 @@ def alien_stealth_act(
     """GM-only: op stealth_act {actor,action:move|hide|guard|search|wait,zone?,group?}, stealth_phase, tracker or detection_decide."""
     try:
         parsed = _object(intent)
-        if parsed.get("op") not in {"stealth_act", "stealth_phase", "tracker", "detection_decide", "check_decide"}:
+        if parsed.get("op") not in {
+            "stealth_act",
+            "stealth_phase",
+            "tracker",
+            "detection_decide",
+            "search_decide",
+            "scene_mode",
+            "check_decide",
+        }:
             raise LoreKitError("Unsupported stealth operation")
         return _mutate(session_id, parsed, request_id, expected_revision, seed)
     except LoreKitError as exc:
@@ -282,7 +294,7 @@ def alien_stealth_act(
 def alien_recover(
     session_id: int, recovery: str, request_id: str, expected_revision: int, seed: int | None = None
 ) -> str:
-    """GM-only: {actor,target?,method:first_aid|rally|repair|surgery|stop_panic|rest,...}.
+    """GM-only: {actor,target?,method:first_aid|rally|repair|surgery|stop_panic|rest|reactivate|disease_care,...}.
 
     Rest needs safe:true; repairs/surgery need shift_completed:true. Check decisions
     are handled by alien_check_decide. Resources, injuries and clocks persist.
@@ -341,7 +353,7 @@ def alien_hazard(session_id: int, hazard: str, request_id: str, expected_revisio
 def alien_environment(
     session_id: int, event: str, request_id: str, expected_revision: int, seed: int | None = None
 ) -> str:
-    """GM-only: resolve {action:blast|fire_set|fall|extinguish|radiation|leave_radiation,...}. Radiation resolves one exposure and schedules later exposures."""
+    """GM-only: resolve {action:blast|fire_set|fall|extinguish|radiation|leave_radiation|breach|shoot_hull|countdown_set,...}. Radiation resolves one exposure and schedules later exposures."""
     return _json_command(session_id, event, "environment", request_id, expected_revision, seed)
 
 
@@ -361,7 +373,7 @@ def alien_trauma(session_id: int, intent: str, request_id: str, expected_revisio
     """GM-only: op trauma {actor,chapter}, trauma_decide {actor,agenda?|personality?} or trauma_event {actor,event,reason}."""
     try:
         parsed = _object(intent)
-        if parsed.get("op") not in {"trauma", "trauma_decide", "trauma_event"}:
+        if parsed.get("op") not in {"trauma", "trauma_decide", "trauma_event", "trauma_due_decide"}:
             raise LoreKitError("Unsupported trauma operation")
         return _mutate(session_id, parsed, request_id, expected_revision, seed)
     except LoreKitError as exc:
@@ -384,3 +396,83 @@ def alien_talent(session_id: int, intent: str, request_id: str, expected_revisio
         return _mutate(session_id, parsed, request_id, expected_revision, seed)
     except LoreKitError as exc:
         return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_horror(session_id: int, event: str, request_id: str, expected_revision: int, seed: int | None = None) -> str:
+    """GM-only: {actor,trigger:first_sight|adjacent|synthetic_reveal|crew_attack|horrifying_event,source?,terrifying?,same_crew?,reason?}.
+
+    First sight is remembered per actor/source. Adjacent terror and arbitrary
+    horror require explicit GM context; synthetic revelation changes public facts.
+    """
+    return _json_command(session_id, event, "horror", request_id, expected_revision, seed)
+
+
+@mcp.tool()
+@alien_only
+def alien_check_benefits(session_id: int, choice: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: {actor,check_id,benefits:[descriptions]} spends extra successes from a completed generic check.
+
+    Combat, recovery and talent checks spend successes through their own resolver.
+    A new generic check replaces this actor's unspent narrative-success balance.
+    """
+    return _json_command(session_id, choice, "check_benefits", request_id, expected_revision)
+
+
+@mcp.tool()
+@alien_only
+def alien_hazard_remedy(session_id: int, remedy: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: {actor,hazard,reason,meal?} records removal of a fatigue/vacuum source; this does not heal lost Health."""
+    return _json_command(session_id, remedy, "hazard_remedy", request_id, expected_revision)
+
+
+@mcp.tool()
+@alien_only
+def alien_damage(
+    session_id: int,
+    actor_id: str,
+    amount: int,
+    reason: str,
+    request_id: str,
+    expected_revision: int,
+    seed: int | None = None,
+) -> str:
+    """GM-only: apply explicitly adjudicated normal damage through armor, criticals and reactions.
+
+    Use the attack/environment operations for their specific modifiers and hazards.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        return "ERROR: Damage requires a concrete GM reason"
+    return _mutate(
+        session_id,
+        {"op": "damage", "actor": actor_id, "amount": amount, "reason": reason},
+        request_id,
+        expected_revision,
+        seed,
+    )
+
+
+@mcp.tool()
+@alien_only
+def alien_disclose(session_id: int, disclosure: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: {actor,fields:[health|health_max|stress|story_points|species],reason} chooses public mechanical facts.
+
+    Default public actors have the same shape regardless of secret identity.
+    Secret synthetic species must first use the revelation horror trigger.
+    """
+    return _json_command(session_id, disclosure, "disclose", request_id, expected_revision)
+
+
+@mcp.tool()
+@alien_only
+def alien_lifecycle(
+    session_id: int, pacing: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: {actor,kind:deadline|resolve|stasis,reason,shift?|active?} records source-authorized gestation pacing.
+
+    Stasis pauses infection/incubation only; general ship travel and stasis medicine
+    are deferred. Resolve can explicitly advance a life-cycle event before its
+    default deadline, with spawned identities and witness effects in the same audit.
+    """
+    return _json_command(session_id, pacing, "lifecycle", request_id, expected_revision, seed)

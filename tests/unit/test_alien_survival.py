@@ -136,3 +136,35 @@ def test_critical_injury_healing_waits_for_surgery_and_health_is_independent():
     assert a["health"] == a["health_max"]
     survival.advance_time(s, "day", 1)
     assert a["injuries"] == []
+
+
+def test_sleep_loss_forces_one_shift_and_hypersleep_needs_a_meal():
+    from lorekit.alien.effects import drain
+
+    class Ones:
+        def randint(self, low, high):
+            return 1
+
+    s, b = setup()
+    a = s["actors"]["example"]
+    a.update(health=1, fatigued=True, stress=1)
+    survival.hazard(s, {"actor": "example", "kind": "sleep"}, b, Ones())
+    survival.advance_time(s, "shift", 1)
+    out = drain(s, Ones(), bundle=b)
+    # The failed active Survival roll has a stress symbol and completes without a push.
+    assert a["unconscious"] and a["hazards"][0]["kind"] == "forced_sleep"
+    survival.advance_time(s, "shift", 1)
+    drain(s, Ones(), bundle=b)
+    assert not a["unconscious"] and not a["fatigued"]
+    survival.hazard(s, {"actor": "example", "kind": "hypersleep"}, b, Ones())
+    from lorekit.db import LoreKitError
+
+    with pytest.raises(LoreKitError, match="awake shift"):
+        survival.remedy(s, {"actor": "example", "hazard": "hypersleep", "reason": "Meal", "meal": True})
+    survival.advance_time(s, "shift", 1)
+    drain(s, Ones(), bundle=b)
+    assert a["fatigued"]
+    survival.remedy(
+        s, {"actor": "example", "hazard": "hypersleep", "reason": "Awake for a shift with a meal", "meal": True}
+    )
+    assert not a["fatigued"]

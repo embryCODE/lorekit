@@ -32,7 +32,7 @@ def start(state, intent, bundle, rng):
         raise LoreKitError("Mental trauma is disabled for this session")
     aid = intent.get("actor")
     a = actor(state, aid)
-    if a["species"] != "human" or a["kind"] != "pc":
+    if a["species"] != "human" or a["kind"] != "pc" or a["dead"]:
         return {"type": "trauma_immune", "actor": aid}
     chapter = intent.get("chapter")
     if not isinstance(chapter, str) or not chapter.strip():
@@ -49,6 +49,7 @@ def start(state, intent, bundle, rng):
         {
             "actor": aid,
             "skill": "empathy",
+            "_attribute_only": True,
             "no_push": True,
             "no_stress": True,
             "continuation": {"kind": "trauma", "actor": aid},
@@ -69,6 +70,8 @@ def apply(state, aid, definition):
             a["trauma_penalties"][effect["attribute"]] += effect["value"]
         elif hook == "resolve_delta":
             a["resolve"] += effect["value"]
+            if a.get("alternate_personality"):
+                a["alternate_personality"]["resolve"] += effect["value"]
         elif hook == "trauma_threshold":
             a["trauma_threshold"] = effect["value"]
         elif hook == "agenda_change":
@@ -111,12 +114,25 @@ def decide(state, intent, bundle, rng):
         if not candidates:
             raise LoreKitError("Alternate personality needs a local talent pool")
         spec = copy.deepcopy(spec)
+        if "skills" in spec and spec["skills"] != a["skills"]:
+            raise LoreKitError("Alternate personality retains existing skill ratings")
+        spec["skills"] = copy.deepcopy(a["skills"])
         spec["talents"] = [rng.choice(candidates)]
         alternate = build(spec, bundle, imported=True)
         for key in ("strength", "agility"):
             if alternate["attributes"][key] != a["attributes"][key]:
                 raise LoreKitError("Alternate personality retains physical attributes")
-        keys = ("name", "attributes", "skills", "talents", "private", "resolve")
+        import math
+
+        from lorekit.alien.characters import bonus
+
+        mental_offset = (
+            a["resolve"]
+            - math.ceil((a["attributes"]["wits"] + a["attributes"]["empathy"]) / 2)
+            - bonus(a, bundle, "resolve_bonus")
+        )
+        alternate["resolve"] += mental_offset
+        keys = ("name", "attributes", "talents", "private", "resolve")
         a["alternate_personality"] = {key: copy.deepcopy(alternate[key]) for key in keys}
     state["pending"] = None
     return {"type": "trauma_choice_resolved", "actor": p["actor"]}
@@ -148,3 +164,22 @@ def event(state, intent):
     else:
         effects.stress(a, 1)
     return {"type": "trauma_trigger", "actor": aid, "event": kind, "reason": intent["reason"]}
+
+
+def due_decide(state, intent):
+    from lorekit.alien import effects
+
+    p = state["pending"]
+    if (
+        not p
+        or p["type"] != "trauma_due"
+        or p["actor"] != intent.get("actor")
+        or not isinstance(intent.get("reason"), str)
+        or not intent["reason"].strip()
+    ):
+        raise LoreKitError("Record the GM hallucination description for this due shift")
+    a = actor(state, p["actor"])
+    a["trauma_hallucination_shift"] = p["shift"]
+    effects.stress(a, 1)
+    state["pending"] = None
+    return {"type": "hallucination_resolved", "actor": p["actor"], "shift": p["shift"], "reason": intent["reason"]}

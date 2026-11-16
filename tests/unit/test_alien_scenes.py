@@ -94,3 +94,79 @@ def test_fractional_load_counts_reloads_excludes_drops_and_stresses_each_move():
     a["species"] = "synthetic"
     scenes.move(s, "0", "hall", b)
     assert a["stress"] == 2
+
+
+def test_crawlspace_order_blocks_friendlies_and_tracks_entry_end():
+    s = state()
+    scenes.setup(
+        s,
+        {
+            "zones": {"duct": {"crawlspace": True, "capacity": 3}, "hall": {"outer_armor": 3, "auto_seal": True}},
+            "borders": [{"a": "duct", "b": "hall", "open": True, "ends": {"duct": "head"}}],
+            "placements": {"0": "duct", "1": "duct", "2": "hall"},
+            "crawl_order": {"duct": ["0", "1"]},
+        },
+    )
+    with pytest.raises(LoreKitError, match="past another"):
+        scenes.move(s, "1", "hall", {"collections": {}})
+    scenes.move(s, "0", "hall", {"collections": {}})
+    scenes.move(s, "2", "duct", {"collections": {}})
+    assert s["scene"]["crawl_order"]["duct"] == ["2", "1"]
+
+
+def test_passage_permission_is_one_crossing_and_broken_blockers_do_not_count():
+    s = state()
+    edge = s["scene"]["borders"][0]
+    edge["blockers"] = ["1"]
+    with pytest.raises(LoreKitError, match="blocks this"):
+        scenes.move(s, "0", "hall", {"collections": {}})
+    s["actors"]["0"]["passed"] = ["1"]
+    scenes.move(s, "0", "hall", {"collections": {}})
+    assert "passed" not in s["actors"]["0"]
+    s["actors"]["1"]["health"] = 0
+    scenes.move(s, "0", "room", {"collections": {}})
+
+
+def test_hold_off_defers_stun_recovery_until_turn_is_used():
+    from lorekit.alien.engine import transition
+
+    s = state()
+    for a in s["actors"].values():
+        a["kind"] = "npc"
+    scenes.start_combat(s, {"actors": list(s["actors"])}, random.Random(1))
+    combat = s["combat"]
+    first = combat["slots"][0]["actors"][0]
+    last = combat["slots"][-1]["actors"][0]
+    s["actors"][first]["stunned"] = True
+    assert not s["queue"]
+    transition(s, {"op": "hold_off", "actor": first, "card": combat["slots"][-1]["card"]}, random.Random(1))
+    assert not s["queue"] and s["actors"][first]["stunned"]
+    transition(s, {"op": "end_turn", "actor": last}, random.Random(1))
+    middle = combat["slots"][combat["index"]]["actors"][0]
+    transition(s, {"op": "end_turn", "actor": middle}, random.Random(1))
+    result = transition(s, {"op": "begin_turn", "actor": first}, random.Random(5))
+    assert result["type"] == "turn_effects"
+    assert result["events"][0]["type"] == "stun_result"
+    assert not s["actors"][first]["stunned"]
+
+
+def test_full_action_help_must_be_prepared_on_helpers_turn():
+    from lorekit.alien import actions, checks
+
+    s = state()
+    for a in s["actors"].values():
+        a["kind"] = "npc"
+    scenes.start_combat(s, {"actors": ["0", "1"]}, random.Random(1))
+    first = s["combat"]["slots"][0]["actors"][0]
+    helper = "1" if first == "0" else "0"
+    b = {"collections": {}}
+    with pytest.raises(LoreKitError, match="full action cannot interrupt"):
+        checks.start(s, {"actor": first, "skill": "comtech", "helpers": [helper]}, b, random.Random(1))
+    scenes.hold_off(s, first, s["combat"]["slots"][-1]["card"])
+    s["actors"][helper].update(species="synthetic", health=0)
+    actions.act(s, {"actor": helper, "action": "help", "target": first, "skill": "comtech"}, b, random.Random(1))
+    scenes.end_turn(s, helper, random.Random(1), b)
+    result = checks.start(s, {"actor": first, "skill": "comtech", "helpers": [helper]}, b, random.Random(1))
+    assert result["type"] == "check_complete"
+    assert s["combat"]["budgets"][helper]["full"]
+    assert "help_offer" not in s["actors"][helper]

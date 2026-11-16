@@ -49,3 +49,57 @@ def test_trauma_blocks_push_and_extra_stress_applies_to_push_dice():
     a["trauma_traits"] = {"extra_stress": True}
     effects.stress(a, 1)
     assert a["stress"] == 2
+
+
+def test_attribute_only_trauma_uses_no_stress_skill_penalties_or_story_prompt():
+    class Twos:
+        def randint(self, low, high):
+            return 2
+
+    s, b = setup()
+    a = s["actors"]["crew"]
+    s["options"]["mental_trauma"] = True
+    a.update(highest_panic=9, stress=10, story_points=1, stress_responses=["aggravated"])
+    result = trauma.start(s, {"actor": "crew", "chapter": "complete"}, b, Twos())
+    assert result["type"] == "check_complete"
+    assert result["checks"][0]["roll"] == {"base": [2, 2, 2], "stress": []}
+    assert a["story_points"] == 1
+
+
+def test_hallucination_cannot_be_skipped_or_charged_twice_for_a_shift():
+    from lorekit.alien import survival
+
+    s, b = setup()
+    trauma.apply(s, "crew", {"id": "original", "effects": [{"hook": "trauma_trait", "trait": "hallucinations"}]})
+    survival.advance_time(s, "shift", 1)
+    effects.drain(s, random.Random(1), bundle=b)
+    assert s["pending"]["type"] == "trauma_due"
+    trauma.due_decide(s, {"actor": "crew", "reason": "GM describes an unsettling vision"})
+    assert s["actors"]["crew"]["stress"] == 1
+    trauma.event(s, {"actor": "crew", "event": "hallucination", "reason": "A vision during the new shift"})
+    survival.advance_time(s, "shift", 1)
+    effects.drain(s, random.Random(1), bundle=b)
+    assert s["pending"] is None and s["actors"]["crew"]["stress"] == 2
+
+
+def test_personality_keeps_body_and_skill_state_and_both_resolve_penalties():
+    s, b = setup()
+    b["collections"]["talents"] = {"example": {"page": 1, "effects": [{"hook": "resolve_bonus", "value": 1}]}}
+    a = s["actors"]["crew"]
+    trauma.apply(s, "crew", {"id": "offset", "effects": [{"hook": "resolve_delta", "value": -2}]})
+    trauma.apply(s, "crew", {"id": "split", "effects": [{"hook": "trauma_trait", "trait": "personality_split"}]})
+    trauma.decide(
+        s,
+        {
+            "actor": "crew",
+            "personality": {"name": "Other", "attributes": dict(strength=3, agility=3, wits=2, empathy=4)},
+        },
+        b,
+        random.Random(1),
+    )
+    effects.stress(a, 1)
+    assert a["name"] == "Other" and a["resolve"] == 2
+    trauma.apply(s, "crew", {"id": "second-offset", "effects": [{"hook": "resolve_delta", "value": -2}]})
+    effects.stress(a, 1)
+    assert a["name"] == "Crew" and a["resolve"] == -1
+    assert a["attributes"]["strength"] == 3 and a["health_max"] == 3

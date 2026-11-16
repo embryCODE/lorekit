@@ -222,8 +222,189 @@ def test_tail_hold_ends_when_source_dies_or_acts():
     state["actors"]["source"]["dead"] = True
     scenes.move(state, "target", "b", bundle, forced=True)
     state["actors"]["source"]["dead"] = False
+    state["actors"]["target"]["zone"] = "a"
     scenes.start_combat(state, {"actors": ["source", "target"], "surprise": ["source"]}, random.Random(1))
     creatures.act(
         state, {"actor": "source", "target": "target", "feasible": list(range(1, 7))}, bundle, random.Random(1)
     )
     assert "immobilized_by" not in state["actors"]["target"]
+
+
+def test_signature_panic_choice_precedes_following_resistance_check():
+    from lorekit.alien import characters, creatures
+    from lorekit.alien.state import initial
+
+    class CountingDie:
+        calls = 0
+
+        def randint(self, low, high):
+            self.calls += 1
+            return 2
+
+    b = {"collections": {"creatures": {"test": {"health": 2, "speed": 1, "skills": {}}}}}
+    s = initial()
+    s["actors"]["source"] = creatures.build("test", "Source", b)
+    s["actors"]["target"] = characters.build(
+        {"name": "Target", "attributes": dict(strength=3, agility=3, wits=3, empathy=3), "stress": 4}, b, imported=True
+    )
+    s["pending"] = {
+        "type": "signature",
+        "execution": {
+            "actor": "source",
+            "target": "target",
+            "actions": [{"hook": "panic"}, {"hook": "resist_damage", "amount": 1}],
+            "index": 0,
+            "hit": False,
+            "damage": False,
+            "die": 3,
+            "choices": {},
+        },
+    }
+    rng = CountingDie()
+    creatures.resume(s, b, rng)
+    assert s["pending"]["type"] == "panic_choice"
+    assert s["pending"]["result"] == 3
+    assert rng.calls == 1
+    assert s["queue"][0]["type"] == "signature_resume"
+
+
+def test_broken_outcomes_and_last_breath_second_hit():
+    import copy
+    import random
+
+    from lorekit.alien import characters, creatures, effects, scenes, survival
+    from lorekit.alien.engine import transition
+    from lorekit.alien.state import initial
+
+    class FixedDie:
+        def __init__(self, value):
+            self.value = value
+
+        def randint(self, low, high):
+            return self.value
+
+    b = {"collections": {"creatures": {"test": {"health": 4, "speed": 2, "skills": {}}}}}
+    for value in range(1, 7):
+        s = initial()
+        s["actors"]["source"] = creatures.build("test", "Specimen", b)
+        s["actors"]["source"]["health"] = 0
+        s["actors"]["crew"] = characters.build(
+            {"name": "Crew", "attributes": dict(strength=3, agility=3, wits=3, empathy=3)}, b, imported=True
+        )
+        scenes.setup(
+            s,
+            {
+                "zones": {"a": {}, "b": {}, "c": {}},
+                "borders": [{"a": "a", "b": "b", "open": True}, {"a": "b", "b": "c", "open": True}],
+                "placements": {"source": "a", "crew": "a"},
+            },
+        )
+        creatures.broken(s, "source", FixedDie(value), b["collections"]["creatures"]["test"])
+        a = s["actors"]["source"]
+        if value == 1:
+            scenes.start_combat(s, {"actors": ["source", "crew"], "surprise": ["source"]}, random.Random(1))
+            transition(s, {"op": "begin_turn", "actor": "source"}, random.Random(1))
+            assert a["health"] == 1
+        elif value == 2:
+            assert a["speed"] == 1 and a["health"] == 1
+            scenes.start_combat(s, {"actors": ["source", "crew"], "surprise": ["source"]}, random.Random(1))
+            transition(s, {"op": "begin_turn", "actor": "source"}, random.Random(1))
+            assert s["pending"]["type"] == "creature_escape"
+        elif value == 3:
+            effects.drain(s, random.Random(1), bundle=b)
+            assert s["pending"]["type"] == "creature_escape"
+            creatures.escape_decide(
+                s, {"actor": "source", "path": ["b", "c"], "route_unclear": True}, b, random.Random(1)
+            )
+            assert a["escaped"]
+        elif value == 4:
+            assert a["last_breath"] and not a["dead"]
+            survival.damage(s, "source", 1, b, FixedDie(1))
+            assert a["dead"]
+        else:
+            assert a["dead"]
+    for early, mode in [(True, False), (False, True)]:
+        s = initial()
+        s["options"]["aliens_mode"] = mode
+        s["actors"]["source"] = creatures.build("test", "Specimen", b)
+        creatures.broken(s, "source", FixedDie(1), {"early_stage": early})
+        assert s["actors"]["source"]["dead"]
+
+
+def test_attached_parasite_moves_with_host_and_stasis_pauses_its_clock():
+    import random
+
+    from lorekit.alien import characters, creatures, effects, scenes, survival
+    from lorekit.alien.state import initial, validate_snapshot
+
+    b = {
+        "collections": {
+            "creatures": {
+                "parasite": {"stage": "facehugger", "health": 2, "speed": 1, "skills": {}, "birth": "juvenile"},
+                "juvenile": {"health": 2, "speed": 1, "skills": {}, "matures": "adult"},
+                "adult": {"health": 4, "speed": 1, "skills": {}},
+            }
+        }
+    }
+    s = initial()
+    s["actors"]["parasite"] = creatures.build("parasite", "Parasite", b)
+    s["actors"]["host"] = characters.build(
+        {"name": "Host", "kind": "npc", "attributes": dict(strength=3, agility=3, wits=3, empathy=3)}, b, imported=True
+    )
+    scenes.setup(
+        s,
+        {
+            "zones": {"a": {}, "b": {}},
+            "borders": [{"a": "a", "b": "b", "open": True}],
+            "placements": {"parasite": "a", "host": "a"},
+        },
+    )
+    s["actors"]["parasite"]["adjacent"] = ["host"]
+    s["actors"]["host"]["adjacent"] = ["parasite"]
+    s["pending"] = {
+        "type": "signature",
+        "execution": {
+            "actor": "parasite",
+            "target": "host",
+            "actions": [{"hook": "facehug"}],
+            "index": 0,
+            "hit": True,
+            "damage": False,
+            "die": 6,
+            "choices": {},
+        },
+    }
+    creatures.resume(s, b, random.Random(1))
+    scenes.move(s, "host", "b", b, forced=True)
+    assert s["actors"]["parasite"]["zone"] == "b"
+    assert s["actors"]["parasite"]["attached_to"] == "host"
+    validate_snapshot(s)
+    creatures.lifecycle(
+        s, {"actor": "host", "kind": "stasis", "active": True, "reason": "GM confirms cryostorage"}, b, random.Random(1)
+    )
+    for _ in range(2):
+        survival.advance_time(s, "shift", 1)
+        effects.drain(s, random.Random(1), bundle=b)
+    assert s["actors"]["host"]["facehug"]["stage"] == "attached"
+    creatures.lifecycle(
+        s, {"actor": "host", "kind": "stasis", "active": False, "reason": "GM confirms awakening"}, b, random.Random(1)
+    )
+    assert s["actors"]["host"]["facehug"]["shift_due"] == 3
+    survival.advance_time(s, "shift", 1)
+    effects.drain(s, random.Random(1), bundle=b)
+    assert s["actors"]["host"]["facehug"]["stage"] == "incubating"
+    assert "attached_to" not in s["actors"]["parasite"]
+    creatures.lifecycle(
+        s,
+        {"actor": "host", "kind": "deadline", "shift": 6, "reason": "GM chooses slower gestation"},
+        b,
+        random.Random(1),
+    )
+    creatures.lifecycle(
+        s, {"actor": "host", "kind": "resolve", "reason": "GM explicitly advances the birth"}, b, random.Random(1)
+    )
+    assert s["actors"]["host"]["dead"] and "host-burster" in s["actors"]
+    survival.advance_time(s, "shift", 1)
+    effects.drain(s, random.Random(1), bundle=b)
+    assert s["actors"]["host-burster"]["content_id"] == "adult"
+    validate_snapshot(s)

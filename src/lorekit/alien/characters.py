@@ -52,6 +52,7 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
         "name",
         "species",
         "kind",
+        "side",
         "attributes",
         "skills",
         "career",
@@ -123,6 +124,7 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
         "name": spec["name"].strip(),
         "species": species,
         "kind": kind,
+        "side": spec.get("side", "crew" if kind == "pc" else "opposition"),
         "career": spec.get("career"),
         "attributes": attrs,
         "skills": skills,
@@ -143,6 +145,8 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
         "fatigued": False,
         "rads": 0,
     }
+    if not isinstance(a["side"], str) or not a["side"].strip():
+        raise LoreKitError("Actor side must be a nonempty identifier")
     for field in ("secret_identity", "revealed"):
         if type(a[field]) is not bool:
             raise LoreKitError(f"{field} must be boolean")
@@ -224,3 +228,13 @@ def load_weight(a: dict, bundle: dict) -> tuple[float, int]:
     multipliers = [e["value"] for e in talents(a, bundle) if e["hook"] == "carry_multiplier"]
     limit = 2 * a["attributes"]["strength"] * (max(multipliers) if multipliers else 1)
     return weight, limit
+
+
+def incapacitated(a):
+    """Zero Health does not, by itself, disable an operating synthetic."""
+    return (
+        a["dead"]
+        or a.get("unconscious")
+        or (a["species"] != "synthetic" and a["health"] == 0)
+        or (a["species"] == "synthetic" and (a.get("shutdown") or 5 in a.get("system_damage", [])))
+    )

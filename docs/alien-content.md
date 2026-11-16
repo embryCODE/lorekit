@@ -1,6 +1,6 @@
 # Alien Evolved local reference content
 
-Alien support is under implementation. The current resolver identifies itself as
+Alien support is experimental; independent acceptance verification remains pending. The current resolver identifies itself as
 `evolved-beta2`, not the final Evolved Edition. Do not treat the presence of a tool
 as proof that the entire cinematic rules checklist is complete.
 
@@ -47,6 +47,12 @@ numbers against your book; results carry the bundle fingerprint for that reason.
   features. `check_modifiers` are `{skill,context,value}` records; `single_use`
   consumes one inventory quantity when the check is rolled. Armor/protection
   fields are `armor`, `acid_proof`, `facehug_proof` and `vacuum_proof`.
+  Consumables declare `consume` using a supported effect (`wake_day`,
+  `hypersleep_relief`, `stress_zero`, `coffee`, `alcohol`, `food`, `water`,
+  `nutrition`, `meal_relief`, `recreation_up` or `recreation_down`), plus optional
+  `dose_group`. The resolver records quantity, per-shift doses, overdose penalties
+  and expiry. `alien_combat_act` accepts the `consume` action with the inventory
+  instance and a GM-selected quick/full cost. Unknown drug effects reject.
 - Creatures declare `health`, `speed`, skill-only `skills`, optional `armor`,
   `armor_fire`, `acid`, `stealth_penalty`, `early_stage`, and six `attacks`
   indexed by strings `"1"` through `"6"`. Each signature has a stable `id` and

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 
 from lorekit.alien import checks, scenes, survival
-from lorekit.alien.characters import bonus
+from lorekit.alien.characters import bonus, incapacitated
 from lorekit.alien.state import actor
 from lorekit.db import LoreKitError
 
@@ -39,10 +39,19 @@ def detect(state, first, second, bundle, rng, before=None):
             ]
             or [0]
         )
-        rolls.append([observation(state, aid, bundle, rng, modifier=-stealth_penalty) for aid in group])
+        group_rolls = []
+        for aid in group:
+            a = actor(state, aid)
+            warmth = (
+                a.get("stage") == "facehugger"
+                and state["scene"]["zones"][a["zone"]].get("body_temperature")
+                and any(actor(state, bid)["species"] == "human" for bid in opposing)
+            )
+            group_rolls.append(observation(state, aid, bundle, rng, modifier=-stealth_penalty - (2 if warmth else 0)))
+        rolls.append(group_rolls)
     values = [max(checks.successes(c) for c in group) for group in rolls]
     if values[0] == values[1]:
-        return scenes.start_combat(state, {"actors": first + second}, rng, bundle)
+        return scenes.enter_combat(state, {"actors": first + second}, bundle, rng)
     winner = first if values[0] > values[1] else second
     state["pending"] = {
         "type": "detection",
@@ -56,7 +65,7 @@ def detect(state, first, second, bundle, rng, before=None):
 
 
 def act(state, intent, bundle, rng):
-    if state["mode"] != "stealth" or not state["scene"]:
+    if state["mode"] not in ("stealth", "combat") or not state["scene"]:
         raise LoreKitError("Stealth actions require an active stealth scene")
     aid = intent.get("actor")
     a = actor(state, aid)
@@ -66,13 +75,34 @@ def act(state, intent, bundle, rng):
     scene = state["scene"]
     for member in group:
         candidate = actor(state, member)
+        if state["combat"] and member in state["combat"]["actors"] and not candidate.get("escaped"):
+            raise LoreKitError("Active combatant cannot take a stealth turn")
         expected = "pc" if candidate["kind"] == "pc" else "npc"
-        if scene["phase"] != expected or member in scene["acted"] or candidate["dead"] or candidate["health"] == 0:
+        if scene["phase"] != expected or member in scene["acted"] or candidate["dead"] or incapacitated(candidate):
             raise LoreKitError("Actor cannot act in this stealth phase")
     action = intent.get("action")
+    was_hidden = all(actor(state, member)["hidden"] for member in group)
     events = []
     before = {member: actor(state, member)["zone"] for member in group}
-    if action == "move":
+    if action == "move" and "path" in intent:
+        path = intent["path"]
+        maximum = a.get("speed", 1) if a["species"] == "xenomorph" else 1
+        if len(group) != 1 or not isinstance(path, list) or not 1 <= len(path) <= maximum:
+            raise LoreKitError("Declare one NPC's path within its Speed movement limit")
+        for destination in path:
+            before = {aid: a["zone"]}
+            events.append(scenes.move(state, aid, destination, bundle, rng=rng))
+            enemies = [
+                bid
+                for bid, other in sorted(state["actors"].items())
+                if other["kind"] != a["kind"] and not other["dead"] and scenes.line_of_sight(state, aid, bid)
+            ]
+            if enemies:
+                scene["acted"].append(aid)
+                result = detect(state, group, enemies, bundle, rng, before)
+                result["events"] = events
+                return result
+    elif action == "move":
         destination = intent.get("zone")
         for member in group:
             events.append(scenes.move(state, member, destination, bundle, rng=rng))
@@ -93,10 +123,15 @@ def act(state, intent, bundle, rng):
             "actor": aid,
             "skill": "observation",
             "context": "search",
+            "modifier": -2 if scene["zones"][a["zone"]].get("dark") and a["species"] != "xenomorph" else 0,
             "continuation": {"kind": "search", "actor": aid},
         }
         scene["acted"].append(aid)
         return checks.start(state, spec, bundle, rng)
+    elif action in ("interact", "ambush"):
+        if not was_hidden or not isinstance(intent.get("description"), str) or not intent["description"].strip():
+            raise LoreKitError("Hidden actions need hidden actors and an explicit description")
+        events.append({"type": "hidden_action", "description": intent["description"]})
     elif action == "wait":
         pass
     else:
@@ -114,30 +149,33 @@ def act(state, intent, bundle, rng):
         and not b["dead"]
         and any(scenes.line_of_sight(state, member, bid) for member in group)
     ]
-    if enemies:
+    if enemies and not (was_hidden and action in ("hide", "wait", "guard")):
         result = detect(state, group, enemies, bundle, rng, before)
         result["events"] = events
         return result
     return {"type": "stealth_action", "events": events}
 
 
-def phase(state, rng, bundle):
+def phase(state, rng, bundle, *, elapsed=False):
     scene = state["scene"]
-    if not scene or state["mode"] != "stealth":
+    if not scene or state["mode"] not in ("stealth", "combat"):
         raise LoreKitError("No active stealth sequence")
     required = [
         aid
         for aid, a in state["actors"].items()
         if not a["dead"]
-        and a["health"] > 0
+        and not incapacitated(a)
         and a["zone"] is not None
         and ("pc" if a["kind"] == "pc" else "npc") == scene["phase"]
+        and (not state["combat"] or aid not in state["combat"]["actors"] or a.get("escaped"))
     ]
     if any(aid not in scene["acted"] for aid in required):
         raise LoreKitError("All actors in this phase must act or wait")
     if scene["phase"] == "pc":
         scene["phase"] = "npc"
     else:
+        if state["combat"] and not elapsed:
+            raise LoreKitError("Confirm elapsed:true to advance a full stealth stretch while combat continues")
         scene["phase"] = "pc"
         scene["acted"] = []
         scene["previous_moved"] = scene["moved"]
@@ -170,11 +208,15 @@ def decide(state, intent, bundle, rng):
         for aid in p["first"] + p["second"]:
             actor(state, aid)["revealed"] = True
         state["pending"] = None
-        return scenes.start_combat(
+        return scenes.enter_combat(
             state,
-            {"actors": p["first"] + p["second"], "surprise": p["winner"] if choice == "ambush" else []},
-            rng,
+            {
+                "actors": p["first"] + p["second"],
+                "surprise": p["winner"] if choice == "ambush" else [],
+                "ambush": p["winner"] if choice == "ambush" else [],
+            },
             bundle,
+            rng,
         )
     else:
         raise LoreKitError("Choose reveal, ambush, hide or back_out")
@@ -203,3 +245,81 @@ def tracker(state, intent, bundle, rng):
             ):
                 pings.append(other["zone"])
     return {"type": "tracker", "supply": rolled, "pings": sorted(pings)}
+
+
+def search_finish(state, result):
+    aid = result["continuation"]["actor"]
+    a = actor(state, aid)
+    candidates = [
+        "actor:" + bid
+        for bid, b in sorted(state["actors"].items())
+        if bid != aid and b["zone"] == a["zone"] and b["hidden"]
+    ]
+    candidates += [
+        "object:" + key
+        for key, obj in sorted(state["scene"].get("objects", {}).items())
+        if obj["zone"] == a["zone"] and not obj.get("found")
+    ]
+    count = min(result["successes"][0], len(candidates))
+    if count:
+        state["pending"] = {"type": "search_results", "actor": aid, "count": count, "candidates": candidates}
+    return {"type": "search_complete", "checks": result["checks"], "pending": copy.deepcopy(state["pending"])}
+
+
+def search_decide(state, intent, bundle, rng):
+    p = state["pending"]
+    if not p or p["type"] != "search_results" or intent.get("actor") != p["actor"]:
+        raise LoreKitError("No matching search results decision")
+    chosen = intent.get("found")
+    if (
+        not isinstance(chosen, list)
+        or len(chosen) != p["count"]
+        or len(set(chosen)) != len(chosen)
+        or any(key not in p["candidates"] for key in chosen)
+    ):
+        raise LoreKitError("GM must choose one hidden discovery per success, up to the eligible count")
+    revealed = []
+    for key in chosen:
+        family, identifier = key.split(":", 1)
+        if family == "actor":
+            a = actor(state, identifier)
+            a.update(hidden=False, revealed=True)
+            revealed.append(identifier)
+        else:
+            state["scene"]["objects"][identifier]["found"] = True
+    aid = p["actor"]
+    state["pending"] = None
+    enemies = [tid for tid in revealed if actor(state, tid)["kind"] != actor(state, aid)["kind"]]
+    event = {"type": "search_discoveries", "actor": aid, "found": chosen}
+    if enemies:
+        event["combat"] = scenes.enter_combat(state, {"actors": [aid] + enemies}, bundle, rng)
+    return event
+
+
+def leave(state, intent, bundle, rng):
+    aid = intent.get("actor")
+    a = actor(state, aid)
+    if not state["combat"] or aid not in state["combat"]["actors"] or a.get("escaped"):
+        raise LoreKitError("Actor is not leaving an active combat")
+    if intent.get("route_unclear") is not True:
+        raise LoreKitError("GM must confirm the route taken is not obvious")
+    enemies = [
+        tid
+        for tid in state["combat"]["actors"]
+        if tid != aid
+        and actor(state, tid).get("side", actor(state, tid)["kind"]) != a.get("side", a["kind"])
+        and not actor(state, tid)["dead"]
+        and not actor(state, tid).get("escaped")
+    ]
+    if any(scenes.line_of_sight(state, tid, aid) for tid in enemies):
+        raise LoreKitError("Move out of all opponents' line of sight before leaving combat")
+    rolls = [observation(state, tid, bundle, rng) for tid in enemies]
+    escaped = not any(checks.successes(roll) for roll in rolls)
+    if escaped:
+        a.update(escaped=True, hidden=True)
+        if not any(
+            other["kind"] == "pc" and not other["dead"] and not other.get("escaped")
+            for other in [actor(state, tid) for tid in state["combat"]["actors"]]
+        ):
+            scenes.finish_combat(state)
+    return {"type": "left_combat", "actor": aid, "escaped": escaped, "checks": rolls}

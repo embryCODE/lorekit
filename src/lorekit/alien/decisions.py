@@ -29,13 +29,25 @@ def panic(state, intent, bundle, rng):
         entry["dropped"] = True
         entry["equipped"] = False
         entry["ground_zone"] = a["zone"]
+        entry["lost"] = state["mode"] != "combat"
     elif result == 10:
         old_friends = effects.friendly(state, p["actor"])
-        options = [
-            b["b"] if b["a"] == a["zone"] else b["a"]
-            for b in state["scene"]["borders"]
-            if a["zone"] in (b["a"], b["b"]) and scenes.traversable(b)
-        ]
+        options = []
+        for border in state["scene"]["borders"]:
+            if a["zone"] not in (border["a"], border["b"]):
+                continue
+            destination = border["b"] if border["a"] == a["zone"] else border["a"]
+            try:
+                scenes.route(state, p["actor"], destination)
+            except LoreKitError:
+                continue
+            options.append(destination)
+        if (
+            a.get("immobilized_by")
+            and not actor(state, a["immobilized_by"])["dead"]
+            or any(e["hook"] == "immobile" for i in a["injuries"] for e in i["effects"])
+        ):
+            options = []
         if not options:
             a["panic_responses"] = [r for r in a["panic_responses"] if r != 10]
             a["panic_responses"].append(12)
@@ -48,7 +60,11 @@ def panic(state, intent, bundle, rng):
             remaining = 1
             if p.get("subsequent_turn"):
                 budget = state["combat"]["budgets"][p["actor"]]
-                remaining = (1 if budget["full"] else 2) - budget["quick"]
+                remaining = (
+                    int(not budget["full"] and budget["quick"] < 2)
+                    if scenes.movement_cost(a) == "full"
+                    else (1 if budget["full"] else 2) - budget["quick"]
+                )
             if remaining == 0:
                 state["pending"] = None
                 return {"type": "panic_flee_exhausted", "actor": p["actor"]}
@@ -59,43 +75,75 @@ def panic(state, intent, bundle, rng):
                 or intent.get("away_from_threat") is not True
             ):
                 raise LoreKitError("Flee along a path using all remaining moves, confirmed away from the threat")
-            for zone in path:
-                scenes.move(state, p["actor"], zone, bundle, forced=True, rng=rng)
-            if p.get("subsequent_turn"):
-                state["combat"]["budgets"][p["actor"]] = {"full": True, "quick": 1}
-            else:
-                a["stress"] = max(0, a["stress"] - 1)
-                for aid in old_friends:
-                    effects.stress(actor(state, aid), 1)
+            from lorekit.alien import forced_movement
+            from lorekit.alien.engine import complete_check
+
+            state["pending"] = None
+            plan = {
+                "kind": "flee",
+                "actor": p["actor"],
+                "path": path,
+                "index": 0,
+                "paid": bool(p.get("subsequent_turn")),
+                "friends": old_friends,
+            }
+            return complete_check(state, forced_movement.run(state, plan, bundle, rng), bundle, rng)
     elif result == 11:
         target_id = a.get("frenzy_target", intent.get("target"))
         if intent.get("target", target_id) != target_id:
             raise LoreKitError("Frenzy continues against its original target")
         target = actor(state, target_id)
-        if target["health"] == 0 or target["dead"]:
-            effects.stop_panic(a)
+        from lorekit.alien.characters import incapacitated
+
+        if incapacitated(target):
+            a["panic_responses"] = [value for value in a["panic_responses"] if value != 11]
+            a.pop("frenzy_target", None)
+            if not any(value >= 7 for value in a["panic_responses"]):
+                a.pop("interrupt_blocked", None)
             state["pending"] = None
             return {"type": "frenzy_stopped", "actor": p["actor"]}
         candidates = [
             aid
             for aid, other in state["actors"].items()
-            if aid != p["actor"] and not other["dead"] and other["zone"] is not None
+            if aid != p["actor"]
+            and not other["dead"]
+            and other["zone"] is not None
+            and scenes.line_of_sight(state, p["actor"], aid)
         ]
-        if not candidates:
-            raise LoreKitError("No target; explicit GM ruling required")
-        minimum = min(scenes.range_band(state, p["actor"], aid) for aid in candidates)
-        if not a.get("frenzy_target") and scenes.range_band(state, p["actor"], target_id) != minimum:
-            raise LoreKitError("Frenzy must target a nearest character or creature")
+        if not a.get("frenzy_target"):
+            if not candidates:
+                raise LoreKitError("No target; explicit GM ruling required")
+            minimum = min(scenes.range_band(state, p["actor"], aid) for aid in candidates)
+            if scenes.range_band(state, p["actor"], target_id) != minimum:
+                raise LoreKitError("Frenzy must target a nearest character or creature")
         a["frenzy_target"] = target_id
-        if p.get("subsequent_turn"):
-            # Forced attacks on later turns still spend the ordinary budget.
-            a["panic_responses"].remove(11)
-            scenes.spend(state, p["actor"], "full")
-            a["panic_responses"].append(11)
+        if state["combat"] is None:
+            state["pending"] = None
+            scenes.start_combat(
+                state, {"actors": [p["actor"]] + list(dict.fromkeys(candidates + [target_id]))}, rng, bundle
+            )
+            if state["pending"]:
+                state["queue"].append({"type": "panic_resume", "decision": copy.deepcopy(p)})
+                return {"type": "frenzy_started_combat", "pending": copy.deepcopy(state["pending"])}
+        from lorekit.alien import forced_movement
+        from lorekit.alien.engine import complete_check
+
+        path = intent.get("path", [])
+        if not isinstance(path, list) or len(path) > 2 or type(intent.get("approach", False)) is not bool:
+            raise LoreKitError("Declare a legal frenzy approach path and optional approach:true")
         state["pending"] = None
-        return combat.declare(
-            state, {"actor": p["actor"], "target": target_id, "weapon": intent.get("weapon")}, bundle, forced=True
-        )
+        plan = {
+            "kind": "frenzy",
+            "actor": p["actor"],
+            "path": path,
+            "index": 0,
+            "paid": True,
+            "target": target_id,
+            "weapon": intent.get("weapon"),
+            "subsequent": bool(p.get("subsequent_turn")),
+            "approach": intent.get("approach", False),
+        }
+        return complete_check(state, forced_movement.run(state, plan, bundle, rng), bundle, rng)
     else:
         raise LoreKitError("Unsupported panic decision")
     state["pending"] = None

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 
 from lorekit.alien import checks, effects, scenes, survival
-from lorekit.alien.characters import talents
+from lorekit.alien.characters import incapacitated, talents
 from lorekit.alien.state import actor, integer
 from lorekit.db import LoreKitError
 
@@ -15,6 +15,11 @@ def declare(state, intent, bundle, *, forced=False):
         raise LoreKitError("Start combat first")
     aid, tid = intent.get("actor"), intent.get("target")
     a, target = actor(state, aid), actor(state, tid)
+    effects.refresh_overkill(state, aid)
+    if a["species"] == "xenomorph":
+        raise LoreKitError("Use creature_act and a supported signature instead of a human attack")
+    if a.get("escaped"):
+        raise LoreKitError("Re-enter combat before attacking")
     if aid == tid or target["dead"]:
         raise LoreKitError("Choose another living target")
     if a.get("overkill") and tid not in a["overkill"]:
@@ -27,6 +32,8 @@ def declare(state, intent, bundle, *, forced=False):
         instance, definition = survival.item(a, weapon_id, bundle)
         if not instance.get("equipped") or instance.get("dropped") or instance.get("jammed"):
             raise LoreKitError("Weapon must be available, equipped and unjammed")
+        if 3 in a.get("system_damage", []) and definition.get("hands", 1) > 1:
+            raise LoreKitError("Damaged arm servos allow only one-handed gear")
         if "damage" not in definition:
             raise LoreKitError("Item is not a supported weapon")
         if definition.get("supply_type") and not instance["supply"]:
@@ -41,9 +48,11 @@ def declare(state, intent, bundle, *, forced=False):
     if not scenes.line_of_sight(state, aid, tid):
         if target.get("cover") != "full" or intent.get("known_target") is not True:
             raise LoreKitError("Target not visible; covered known target requires explicit GM confirmation")
-    unaware = tid in a.get("ambush_targets", []) or bool(target.get("grappled_by"))
+    unaware = tid in a.get("ambush_targets", []) or bool(target.get("grappled_by")) or bool(target.get("unconscious"))
     modifier = definition.get("modifier", 0) - (0 if unaware else 2 * max(0, definition.get("minimum", 0) - band))
-    if unaware:
+    if band > 0:
+        modifier += {"small": -2, "normal": 0, "large": 2}[target.get("size", "normal")]
+    if unaware and (band == 0 or tid in a.get("ambush_targets", [])):
         modifier += 2
     if intent.get("weak_spot", False):
         modifier -= 2
@@ -65,6 +74,8 @@ def declare(state, intent, bundle, *, forced=False):
         raise LoreKitError("Special attack requires Adjacent range")
     if special:
         modifier -= definition.get("modifier", 0)
+    if special and intent.get("full_auto"):
+        raise LoreKitError("Special attacks do not fire bursts")
     if intent.get("full_auto") and not definition.get("full_auto"):
         raise LoreKitError("Weapon cannot fire full auto")
     hooks = talents(a, bundle)
@@ -127,6 +138,7 @@ def defend(state, intent, bundle, rng):
     if intent.get("actor") != tid:
         raise LoreKitError("Target must decide defense")
     target = actor(state, tid)
+    effects.refresh_overkill(state, tid)
     choice = intent.get("choice")
     if choice == "quick_shot":
         if attack["band"] == 0 or not any(e["hook"] == "quick_shot" for e in talents(target, bundle)):
@@ -143,12 +155,12 @@ def defend(state, intent, bundle, rng):
             "actor": attack["actor"],
             "skill": attack["skill"],
             "modifier": attack["modifier"],
+            "two_hands": attack["definition"].get("hands", 1) > 1,
+            "two_arms": attack["definition"].get("hands", 1) > 1,
             "opponent": {"actor": tid, "skill": reaction["skill"], "modifier": reaction["modifier"]},
             "continuation": {"kind": "quick_shot", "attacks": [copy.deepcopy(attack), copy.deepcopy(reaction)]},
         }
-        if reaction["definition"].get("explosive"):
-            raise LoreKitError("A Quick Shot with an explosive reaction weapon requires an explicit GM ruling")
-        if attack["definition"].get("explosive"):
+        if attack["definition"].get("explosive") or reaction["definition"].get("explosive"):
             from lorekit.alien import area
 
             result = area.begin(state, spec, attack)
@@ -205,7 +217,7 @@ def defend(state, intent, bundle, rng):
             or target["species"] == "xenomorph"
             or choice != expected
             or target.get("cover") == "full"
-            or target["health"] == 0
+            or incapacitated(target)
         ):
             raise LoreKitError("This defense is unavailable")
         scenes.spend(state, tid, "quick", out_of_turn=True)
@@ -284,7 +296,23 @@ def finish(state, result, bundle, rng, *, reactions=True):
                 else definition["damage"] + net - 1 - int(conserve)
             )
             if definition.get("stun"):
-                stun_result = survival.stun(state, attack["target"], amount, bundle, rng)
+                barrier = (
+                    target.get("barrier_armor", 0)
+                    if (target.get("cover") == "full" or attack.get("area_secondary") and target.get("cover"))
+                    and not attack.get("intercepted")
+                    else 0
+                )
+                stun_result = survival.stun(
+                    state,
+                    attack["target"],
+                    amount,
+                    bundle,
+                    rng,
+                    piercing=definition.get("piercing", False),
+                    weak_spot=attack["weak_spot"],
+                    barrier_armor=barrier,
+                    base_damage=definition["damage"],
+                )
                 if stun_result.get("type") == "check_complete":
                     stun_result = survival.finish_stun(state, stun_result)
                 events.append(stun_result)
@@ -318,23 +346,67 @@ def finish(state, result, bundle, rng, *, reactions=True):
                 event = {"type": "friendly_fire", "target": unintended, "dice": dice, "events": []}
                 if hits:
                     victim = actor(state, unintended)
-                    event["events"] = survival.damage(
-                        state,
-                        unintended,
-                        definition["damage"] + hits - 1,
-                        bundle,
-                        rng,
-                        piercing=definition.get("piercing", False),
-                        base_damage=definition["damage"],
-                        barrier_armor=victim.get("barrier_armor", 0) if victim.get("cover") == "full" else 0,
-                    )
+                    barrier = victim.get("barrier_armor", 0) if victim.get("cover") == "full" else 0
+                    if definition.get("stun"):
+                        resolved = survival.stun(
+                            state,
+                            unintended,
+                            definition["damage"] + hits - 1,
+                            bundle,
+                            rng,
+                            piercing=definition.get("piercing", False),
+                            base_damage=definition["damage"],
+                            barrier_armor=barrier,
+                        )
+                        if resolved.get("type") == "check_complete":
+                            resolved = survival.finish_stun(state, resolved)
+                        event["events"] = [resolved]
+                    else:
+                        event["events"] = survival.damage(
+                            state,
+                            unintended,
+                            definition["damage"] + hits - 1,
+                            bundle,
+                            rng,
+                            piercing=definition.get("piercing", False),
+                            base_damage=definition["damage"],
+                            barrier_armor=barrier,
+                        )
                 events.append(event)
-    if attack["weapon"]:
+    if net <= 0 and attack["skill"] == "ranged_combat":
+        zone = state["scene"]["zones"][target["zone"]] if state["scene"] else {}
+        armor = zone.get("outer_armor")
+        if armor is not None and definition["damage"] >= max(
+            0, armor - int(definition.get("piercing", False)) - int(attack["weak_spot"])
+        ):
+            die = rng.randint(1, 6)
+            events.append({"type": "stray_hull_shot", "zone": target["zone"], "die": die})
+            if die == 1:
+                from lorekit.alien.environment import breach
+
+                events.append(breach(state, [target["zone"]], zone.get("auto_seal", False)))
+    if attack["weapon"] and not attack["special"]:
         instance, definition = survival.item(a, attack["weapon"], bundle)
-        if definition.get("single_shot"):
+        if definition.get("single_use"):
+            instance["quantity"] -= 1
+            if not instance["quantity"]:
+                instance["equipped"] = False
+        elif definition.get("single_shot"):
             instance["supply"] = 0
         elif definition.get("supply_type") and not (net > 0 and conserve):
             events.append(survival.supply(a, attack["weapon"], bundle, rng))
+    # A target's pushed stun resistance can suspend the attack's burst offer.
+    if (
+        state["pending"]
+        and state["pending"].get("type") == "check"
+        and state["pending"].get("continuation", {}).get("kind") == "stun"
+        and attack["full_auto"]
+        and not attack.get("defer_burst")
+        and net > 0
+        and result["checks"][0]["pushes"] == 0
+        and attack["burst"] < 3
+    ):
+        state["queue"].append({"type": "burst_offer", "attack": copy.deepcopy(attack)})
     # Full-auto followups are explicit decisions. No silent extra attacks.
     pushed = result["checks"][0]["pushes"] > 0
     if (
@@ -367,14 +439,21 @@ def special_decide(state, intent, bundle, rng):
     attack = p["attack"]
     a, target = actor(state, attack["actor"]), actor(state, attack["target"])
     if attack["special"] == "disarm":
-        entry, _ = survival.item(target, intent.get("item"), bundle)
-        if entry.get("dropped") or not entry.get("equipped"):
+        entry, item_definition = survival.item(target, intent.get("item"), bundle)
+        if (
+            entry.get("dropped")
+            or not entry.get("equipped")
+            or item_definition.get("armor") is not None
+            or item_definition.get("vacuum_proof")
+        ):
             raise LoreKitError("Disarm requires an item in the target's grasp")
         choice = intent.get("choice")
         if choice == "keep":
-            if any(i["id"] == entry["id"] for i in a["inventory"]):
-                raise LoreKitError("Inventory instance ID collision; choose throw instead")
+            new_id = intent.get("new_item_id", entry["id"])
+            if not isinstance(new_id, str) or not new_id or any(i["id"] == new_id for i in a["inventory"]):
+                raise LoreKitError("Choose a new_item_id that is unused in the recipient inventory")
             target["inventory"].remove(entry)
+            entry["id"] = new_id
             a["inventory"].append(entry)
         elif choice == "throw":
             zone = intent.get("zone")
@@ -451,15 +530,14 @@ def finish_quick_shot(state, result, bundle, rng):
                 },
             }
         )
-    if result["continuation"].get("area_result"):
-        next(shot for shot in shots if shot["actor"] == attacks[0]["actor"])["result"] = result["continuation"][
-            "area_result"
-        ]
+    for index, area_result in result["continuation"].get("area_results", {}).items():
+        next(shot for shot in shots if shot["actor"] == attacks[int(index)]["actor"])["result"] = area_result
     if (
-        not result["continuation"].get("area_result")
+        "0" not in result["continuation"].get("area_results", {})
         and attacks[0]["full_auto"]
         and scores[0] > 0
         and result["checks"][0]["pushes"] == 0
+        and attacks[0]["burst"] < 3
     ):
         shots.append({"type": "burst_offer", "attack": attacks[0]})
     state["queue"][0:0] = shots
