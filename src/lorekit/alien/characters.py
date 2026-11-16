@@ -165,6 +165,7 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
             "supply",
             "reloads",
             "equipped",
+            "active_air",
         }:
             raise LoreKitError("Invalid inventory entry")
         item = bundle["collections"].get("items", {}).get(entry.get("content_id"))
@@ -172,6 +173,9 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
             raise LoreKitError("Inventory requires instance ID and supported item content ID")
         if any(i["id"] == entry["id"] for i in a["inventory"] if not i.get("dropped", False)):
             raise LoreKitError("Duplicate inventory instance ID")
+        for flag in ("equipped", "active_air"):
+            if flag in entry and type(entry[flag]) is not bool:
+                raise LoreKitError("Inventory flags must be boolean")
         a["inventory"].append(
             {
                 **copy.deepcopy(entry),
@@ -181,12 +185,42 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
                 "equipped": bool(entry.get("equipped", False)),
             }
         )
+    refresh_equipment(a, bundle)
     return a
+
+
+def refresh_equipment(a, bundle):
+    armor = []
+    protections = {"acid_proof": False, "facehug_proof": False, "vacuum_proof": False}
+    for instance in a["inventory"]:
+        if not instance.get("equipped") or instance.get("dropped"):
+            continue
+        definition = bundle["collections"].get("items", {})[instance["content_id"]]
+        for key in protections:
+            protections[key] |= definition.get(key, False)
+        if "armor" in definition:
+            armor.append((instance, definition))
+    if len(armor) > 1:
+        raise LoreKitError("Only one suit of armor can be worn")
+    if armor:
+        instance, definition = armor[0]
+        instance.setdefault("armor_current", definition["armor"])
+        integer(instance["armor_current"], "item armor", 0, definition["armor"])
+        a["armor"] = instance["armor_current"]
+        a["armor_item"] = instance["id"]
+    elif a.get("armor_item"):
+        a["armor"] = 0
+        a.pop("armor_item")
+    a.update(protections)
 
 
 def load_weight(a: dict, bundle: dict) -> tuple[float, int]:
     entries = bundle["collections"].get("items", {})
-    weight = sum(entries[i["content_id"]].get("weight", 1) * i["quantity"] for i in a["inventory"])
+    weight = sum(
+        entries[i["content_id"]].get("weight", 1) * i["quantity"] + 0.25 * i.get("reloads", 0)
+        for i in a["inventory"]
+        if not i.get("dropped")
+    )
     multipliers = [e["value"] for e in talents(a, bundle) if e["hook"] == "carry_multiplier"]
     limit = 2 * a["attributes"]["strength"] * (max(multipliers) if multipliers else 1)
     return weight, limit

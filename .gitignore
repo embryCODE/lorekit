@@ -8,3 +8,6 @@ examples/tui/dist/
 *.egg-info/
 dist/
 build/
+
+# Locally imported Alien reference content is not redistributable system data.
+/data/alien-content/

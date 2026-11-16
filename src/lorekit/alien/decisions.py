@@ -40,15 +40,42 @@ def panic(state, intent, bundle, rng):
             a["panic_responses"] = [r for r in a["panic_responses"] if r != 10]
             a["panic_responses"].append(12)
         else:
-            if intent.get("zone") not in options or intent.get("away_from_threat") is not True:
-                raise LoreKitError("Choose a reachable adjacent zone away from the threat")
-            scenes.move(state, p["actor"], intent["zone"], bundle, forced=True)
-            a["stress"] = max(0, a["stress"] - 1)
-            for aid in old_friends:
-                effects.stress(actor(state, aid), 1)
+            if p.get("subsequent_turn") and intent.get("safe") is True:
+                a["safe_flee_zone"] = a["zone"]
+                state["pending"] = None
+                return {"type": "panic_flee_waiting", "actor": p["actor"]}
+            path = intent.get("path", [intent.get("zone")])
+            remaining = 1
+            if p.get("subsequent_turn"):
+                budget = state["combat"]["budgets"][p["actor"]]
+                remaining = (1 if budget["full"] else 2) - budget["quick"]
+            if remaining == 0:
+                state["pending"] = None
+                return {"type": "panic_flee_exhausted", "actor": p["actor"]}
+            if (
+                not isinstance(path, list)
+                or len(path) != remaining
+                or not path
+                or intent.get("away_from_threat") is not True
+            ):
+                raise LoreKitError("Flee along a path using all remaining moves, confirmed away from the threat")
+            for zone in path:
+                scenes.move(state, p["actor"], zone, bundle, forced=True, rng=rng)
+            if p.get("subsequent_turn"):
+                state["combat"]["budgets"][p["actor"]] = {"full": True, "quick": 1}
+            else:
+                a["stress"] = max(0, a["stress"] - 1)
+                for aid in old_friends:
+                    effects.stress(actor(state, aid), 1)
     elif result == 11:
-        target_id = intent.get("target")
+        target_id = a.get("frenzy_target", intent.get("target"))
+        if intent.get("target", target_id) != target_id:
+            raise LoreKitError("Frenzy continues against its original target")
         target = actor(state, target_id)
+        if target["health"] == 0 or target["dead"]:
+            effects.stop_panic(a)
+            state["pending"] = None
+            return {"type": "frenzy_stopped", "actor": p["actor"]}
         candidates = [
             aid
             for aid, other in state["actors"].items()
@@ -57,8 +84,14 @@ def panic(state, intent, bundle, rng):
         if not candidates:
             raise LoreKitError("No target; explicit GM ruling required")
         minimum = min(scenes.range_band(state, p["actor"], aid) for aid in candidates)
-        if scenes.range_band(state, p["actor"], target_id) != minimum:
+        if not a.get("frenzy_target") and scenes.range_band(state, p["actor"], target_id) != minimum:
             raise LoreKitError("Frenzy must target a nearest character or creature")
+        a["frenzy_target"] = target_id
+        if p.get("subsequent_turn"):
+            # Forced attacks on later turns still spend the ordinary budget.
+            a["panic_responses"].remove(11)
+            scenes.spend(state, p["actor"], "full")
+            a["panic_responses"].append(11)
         state["pending"] = None
         return combat.declare(
             state, {"actor": p["actor"], "target": target_id, "weapon": intent.get("weapon")}, bundle, forced=True
@@ -85,21 +118,49 @@ def burst(state, intent, bundle):
     instance, definition = survival.item(a, attack["weapon"], bundle)
     if not instance["supply"] or instance.get("jammed"):
         raise LoreKitError("Cannot continue full auto with an empty or jammed weapon")
-    effects.stress(a, 1)
-    attack["burst"] += 1
-    if attack["aim"] and attack["burst"] == 2:
-        attack["modifier"] -= 2
+    from lorekit.alien.characters import talents
+
+    if not any(e["hook"] == "machinegunner" for e in talents(a, bundle)):
+        effects.stress(a, 1)
     tid = intent.get("target", attack["target"])
-    if actor(state, tid)["dead"]:
-        raise LoreKitError("Choose a living burst target")
-    if tid != attack["target"]:
-        if (
-            not scenes.line_of_sight(state, attack["actor"], tid)
-            or scenes.range_band(state, attack["actor"], tid) != attack["band"]
-        ):
-            raise LoreKitError("Retargeting across range/cover modifiers requires an explicit ruling")
-        if actor(state, tid).get("cover") != actor(state, attack["target"]).get("cover"):
-            raise LoreKitError("Retargeting with different cover requires an explicit ruling")
-    attack["target"] = tid
-    state["pending"] = {"type": "defense", "id": f"defense:{state['revision'] + 1}", "attack": attack}
-    return {"type": "defense_required", "decision_id": state["pending"]["id"], "target": tid}
+    state["pending"] = None
+    result = combat.declare(
+        state,
+        {
+            "actor": attack["actor"],
+            "target": tid,
+            "weapon": attack["weapon"],
+            "full_auto": True,
+            "weak_spot": attack["weak_spot"],
+            "known_target": intent.get("known_target", attack.get("known_target", False)),
+        },
+        bundle,
+        forced=True,
+    )
+    state["pending"]["attack"]["burst"] = attack["burst"] + 1
+    return result
+
+
+def overkill(state, intent, bundle, rng):
+    p = state["pending"]
+    if not p or p["type"] != "overkill_choice" or intent.get("actor") != p["actor"]:
+        raise LoreKitError("No matching Overkill decision")
+    a = actor(state, p["actor"])
+    state["pending"] = None
+    if intent.get("choice") == "overkill":
+        enemies = intent.get("enemies")
+        if not isinstance(enemies, list) or not enemies or len(set(enemies)) != len(enemies) or p["actor"] in enemies:
+            raise LoreKitError("Declare the enemies who must be attacked")
+        for enemy in enemies:
+            actor(state, enemy)
+        a["overkill"] = enemies
+        for tid, witness in sorted(state["actors"].items()):
+            if tid != p["actor"] and witness["zone"] == a["zone"] and effects.eligible(witness):
+                effects.enqueue_panic(state, tid, "witnessed_overkill")
+        event = {"type": "overkill", "actor": p["actor"], "enemies": enemies}
+    elif intent.get("choice") == "panic":
+        event = effects.panic(state, p["actor"], rng, bundle=bundle, rolled=p["die"])
+    else:
+        raise LoreKitError("Choose overkill or panic")
+    event["events"] = effects.drain(state, rng, bundle=bundle)
+    return event

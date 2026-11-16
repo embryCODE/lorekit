@@ -150,16 +150,31 @@ def execute(
                 name, kind = built["name"], "npc"
             else:
                 spec = effective.get("build")
-                characters.build(
+                validated = characters.build(
                     spec, content.read(working["content_hash"]), imported=effective["op"] == "character_import"
                 )
-                name, kind = spec["name"], spec.get("kind", "pc")
+                name, kind = validated["name"], validated["kind"]
             cur = db.execute(
                 "INSERT INTO characters (session_id, name, level, type, prefetch) VALUES (?, ?, 1, ?, ?)",
                 (session_id, name, kind, int(kind == "pc")),
             )
             effective["character_id"] = cur.lastrowid
         result = transition(working, effective, random.Random(actual_seed))
+        identities = {}
+        for aid, a in working["actors"].items():
+            if a.get("character_id") is None:
+                cursor = db.execute(
+                    "INSERT INTO characters (session_id,name,level,type,prefetch) VALUES (?,?,1,?,?)",
+                    (session_id, a["name"], a["kind"], int(a["kind"] == "pc")),
+                )
+                a["character_id"] = cursor.lastrowid
+                identities[aid] = cursor.lastrowid
+        from lorekit.alien.characters import refresh_equipment
+        from lorekit.alien.content import read
+
+        active_bundle = read(working["content_hash"])
+        for current_actor in working["actors"].values():
+            refresh_equipment(current_actor, active_bundle)
         working["revision"] += 1
         validate_snapshot(working)
         result = {
@@ -175,6 +190,7 @@ def execute(
             **result,
         }
         entry = {
+            "identity_rows": identities,
             "request_id": request_id,
             "signature": signature,
             "intent": effective,
@@ -207,6 +223,14 @@ def verify(record: dict) -> None:
     state = copy.deepcopy(record["base"])
     for index, entry in enumerate(record["audit"]):
         result = transition(state, copy.deepcopy(entry["intent"]), random.Random(entry["seed"]))
+        for aid, cid in entry.get("identity_rows", {}).items():
+            state["actors"][aid]["character_id"] = cid
+        from lorekit.alien.characters import refresh_equipment
+        from lorekit.alien.content import read
+
+        active_bundle = read(state["content_hash"])
+        for current_actor in state["actors"].values():
+            refresh_equipment(current_actor, active_bundle)
         state["revision"] += 1
         expected_result = {
             "visibility": "gm_only",

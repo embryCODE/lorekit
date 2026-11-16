@@ -20,6 +20,8 @@ def splash(state, target_id, dice_count, bundle, rng):
     health_damage = max(0, raw - before_armor)
     # Armor corrosion uses points of the hit, including absorbed points.
     a["armor"] = max(0, before_armor - raw)
+    if a.get("armor_item"):
+        next(i for i in a["inventory"] if i["id"] == a["armor_item"])["armor_current"] = a["armor"]
     events = []
     if health_damage:
         # Mitigation already occurred using the armor level before corrosion.
@@ -58,4 +60,54 @@ def tick(state, target_id, bundle, rng):
         if result.get("continues") and not a["dead"]:
             remaining.append({"dice": math.ceil(effect["dice"] / 2), "due": state["clocks"]["round"] + 1})
     a["acid"] = remaining
+    return events
+
+
+def floor_splash(state, zone, dice_count, rng):
+    """Resolve a GM-mapped upper floor; no assumed floor on a ground-level map."""
+    surface = state["scene"]["zones"][zone]
+    before = surface["floor_armor"]
+    dice = [rng.randint(1, 6) for _ in range(dice_count)]
+    raw = dice.count(6)
+    surface["floor_armor"] = max(0, before - raw)
+    if raw > before:
+        surface["floor_breached"] = True
+    return {
+        "type": "acid_floor",
+        "zone": zone,
+        "dice": dice,
+        "raw_damage": raw,
+        "armor_before": before,
+        "armor_after": surface["floor_armor"],
+        "breached": surface.get("floor_breached", False),
+        "continues": raw > 0,
+    }
+
+
+def initial_floor(state, zone, dice_count, rng):
+    if not state["scene"] or zone not in state["scene"]["zones"] or "floor_armor" not in state["scene"]["zones"][zone]:
+        return []
+    result = floor_splash(state, zone, dice_count, rng)
+    if result["continues"]:
+        state["scene"].setdefault("floor_acid", []).append(
+            {"zone": zone, "dice": math.ceil(dice_count / 2), "due": state["clocks"]["round"] + 1}
+        )
+    return [result]
+
+
+def tick_floors(state, rng):
+    if not state["scene"]:
+        return []
+    events, remaining = [], []
+    for entry in state["scene"].get("floor_acid", []):
+        if entry["due"] > state["clocks"]["round"]:
+            remaining.append(entry)
+            continue
+        result = floor_splash(state, entry["zone"], entry["dice"], rng)
+        events.append(result)
+        if result["continues"]:
+            remaining.append(
+                {"zone": entry["zone"], "dice": math.ceil(entry["dice"] / 2), "due": state["clocks"]["round"] + 1}
+            )
+    state["scene"]["floor_acid"] = remaining
     return events

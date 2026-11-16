@@ -234,3 +234,29 @@ def test_due_death_check_survives_restart_and_cannot_push(make_session):
         assert p["checks"][0]["roll"]["stress"] == []
     verify(load(db, sid))
     db.close()
+
+
+def test_round_injury_rolls_on_actors_turn_not_round_boundary(make_session):
+    from lorekit.alien.content import install
+
+    sid = make_session(system="alien-evolved")
+    db = require_db()
+    bundle = {"profile": "evolved-beta2", "source": "Original fixtures", "collections": {
+        "injuries": {str(t*10+u): {"page": 1, "effects": [], "lethal": True, "interval": "round"} for t in range(1, 7) for u in range(1, 7)}
+    }}
+    apply(db, sid, {"op": "content_import", "hash": install(bundle)}, "content")
+    for aid in ("a", "b"):
+        apply(db, sid, {"op": "character_import", "actor": aid, "build": spec(kind="npc")}, f"create-{aid}")
+    apply(db, sid, {"op": "scene_setup", "zones": {"room": {}}, "placements": {"a": "room", "b": "room"}}, "scene")
+    result = apply(db, sid, {"op": "combat_start", "actors": ["a", "b"]}, "combat")
+    first = result["combat"]["slots"][0]["actors"][0]
+    second = "b" if first == "a" else "a"
+    apply(db, sid, {"op": "damage", "actor": first, "amount": 4}, "injure")
+    apply(db, sid, {"op": "end_turn", "actor": first}, "end-first", seed=5)
+    a = load(db, sid)["state"]["actors"][first]
+    assert a["injuries"][0]["successes"] == 1
+    assert load(db, sid)["state"]["clocks"]["round"] == 0
+    apply(db, sid, {"op": "end_turn", "actor": second}, "end-second", seed=5)
+    assert load(db, sid)["state"]["actors"][first]["injuries"][0]["successes"] == 1
+    verify(load(db, sid))
+    db.close()

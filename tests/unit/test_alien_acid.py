@@ -29,3 +29,23 @@ def test_absorbed_initial_hit_corrodes_and_continues_with_half_dice():
     next_result = acid.tick(state, "target", bundle, AllSixes())
     assert len(next_result[0]["dice"]) == 2
     assert a["acid"] == [{"dice": 1, "due": 2}]
+
+
+def test_upper_floor_corrosion_continues_after_absorbed_hit():
+    from lorekit.alien import acid
+    from lorekit.alien.state import initial
+
+    class Sixes:
+        def randint(self, low, high):
+            return 6
+
+    state = initial()
+    state["scene"] = {"zones": {"deck": {"floor_armor": 3}}}
+    out = acid.initial_floor(state, "deck", 2, Sixes())
+    assert out[0]["armor_after"] == 1
+    assert not out[0]["breached"]
+    state["clocks"]["round"] += 1
+    acid.tick_floors(state, Sixes())
+    assert state["scene"]["zones"]["deck"]["floor_armor"] == 0
+    state["clocks"]["round"] += 1
+    assert acid.tick_floors(state, Sixes())[0]["breached"]

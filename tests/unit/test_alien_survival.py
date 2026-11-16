@@ -109,3 +109,30 @@ def test_interrupted_rest_does_not_advance_clock_or_recover():
     assert s["clocks"]["stretch"] == 0
     assert a["health"] == 1
     assert a["stress"] == 3
+
+
+def test_critical_injury_healing_waits_for_surgery_and_health_is_independent():
+    s, b = setup()
+    a = s["actors"]["example"]
+    a["injuries"] = [
+        {
+            "id": "test",
+            "effects": [],
+            "lethal": False,
+            "stabilized": True,
+            "interval": None,
+            "due": None,
+            "surgery_required": True,
+            "healing_remaining": 2,
+            "healing_unit": "day",
+            "prosthesis_required": False,
+        }
+    ]
+    survival.advance_time(s, "day", 1)
+    assert a["injuries"][0]["healing_remaining"] == 2
+    a["injuries"][0]["surgery_required"] = False
+    survival.advance_time(s, "day", 1)
+    assert a["injuries"][0]["healing_remaining"] == 1
+    assert a["health"] == a["health_max"]
+    survival.advance_time(s, "day", 1)
+    assert a["injuries"] == []

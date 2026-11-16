@@ -181,7 +181,10 @@ def alien_combat_act(
         parsed = _object(intent)
         if parsed.get("op") not in {
             "attack",
+            "action",
             "creature_act",
+            "egg_release",
+            "facehugger_remove",
             "signature_decide",
             "defense_decide",
             "check_decide",
@@ -190,6 +193,12 @@ def alien_combat_act(
             "move",
             "approach",
             "hold_off",
+            "initiative_decide",
+            "special_decide",
+            "hit_decide",
+            "injury_decide",
+            "overkill_decide",
+            "area_defense",
             "end_turn",
             "queue_continue",
         }:
@@ -283,10 +292,15 @@ def alien_recover(
 
 @mcp.tool()
 @alien_only
-def alien_story_award(session_id: int, actor_id: str, reason: str, request_id: str, expected_revision: int) -> str:
+def alien_story_award(
+    session_id: int, actor_id: str, reason: str, act_id: str, request_id: str, expected_revision: int
+) -> str:
     """GM-only: award one cinematic story point for an explicit agenda-related reason; cap three."""
     return _mutate(
-        session_id, {"op": "story_award", "actor": actor_id, "reason": reason}, request_id, expected_revision
+        session_id,
+        {"op": "story_award", "actor": actor_id, "reason": reason, "act_id": act_id},
+        request_id,
+        expected_revision,
     )
 
 
@@ -313,3 +327,60 @@ def alien_creature_import(
         request_id,
         expected_revision,
     )
+
+
+@mcp.tool()
+@alien_only
+def alien_hazard(session_id: int, hazard: str, request_id: str, expected_revision: int, seed: int | None = None) -> str:
+    """GM-only: apply {actor,kind:air|hunger|sleep|cold|heat|hypersleep|vacuum|disease,unit?,penalty?}. Disease starts with a passive exposure check."""
+    return _json_command(session_id, hazard, "hazard", request_id, expected_revision, seed)
+
+
+@mcp.tool()
+@alien_only
+def alien_environment(
+    session_id: int, event: str, request_id: str, expected_revision: int, seed: int | None = None
+) -> str:
+    """GM-only: resolve {action:blast|fire_set|fall|extinguish|radiation|leave_radiation,...}. Radiation resolves one exposure and schedules later exposures."""
+    return _json_command(session_id, event, "environment", request_id, expected_revision, seed)
+
+
+@mcp.tool()
+@alien_only
+def alien_configure(session_id: int, options: str, request_id: str, expected_revision: int) -> str:
+    """GM-only: set {mental_trauma,aliens_mode,fixed_initiative}. Trauma requires opt-in plus a complete local D66 table."""
+    try:
+        return _mutate(session_id, {"op": "configure", "options": _object(options)}, request_id, expected_revision)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_trauma(session_id: int, intent: str, request_id: str, expected_revision: int, seed: int | None = None) -> str:
+    """GM-only: op trauma {actor,chapter}, trauma_decide {actor,agenda?|personality?} or trauma_event {actor,event,reason}."""
+    try:
+        parsed = _object(intent)
+        if parsed.get("op") not in {"trauma", "trauma_decide", "trauma_event"}:
+            raise LoreKitError("Unsupported trauma operation")
+        return _mutate(session_id, parsed, request_id, expected_revision, seed)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_talent(session_id: int, intent: str, request_id: str, expected_revision: int, seed: int | None = None) -> str:
+    """GM-only: op talent_use {actor,talent,...} or talent_answer {actor,question,answer}.
+
+    Supports explicit company_resources, nurse, analysis, xenomorphology, pull_rank,
+    and counselor uses. Completed examination/care time must be confirmed; elapsed
+    clocks are advanced separately. Analysis and weaknesses require recorded GM answers.
+    """
+    try:
+        parsed = _object(intent)
+        if parsed.get("op") not in {"talent_use", "talent_answer"}:
+            raise LoreKitError("Unsupported talent operation")
+        return _mutate(session_id, parsed, request_id, expected_revision, seed)
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"

@@ -14,7 +14,8 @@ from lorekit.db import LoreKitError
 def permission(a: dict, check: dict, bundle: dict) -> bool:
     extra = any(e["hook"] == "push_attribute" and e["attribute"] == check["attribute"] for e in talents(a, bundle))
     return (
-        effects.eligible(a)
+        not a.get("trauma_traits", {}).get("no_push")
+        and effects.eligible(a)
         and not check["passive"]
         and not check.get("no_push", False)
         and not any(d == 1 for d in check["roll"]["stress"])
@@ -34,13 +35,22 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
         raise LoreKitError("Unknown skill or attribute")
     modifier_from_substitution = 0
     for effect in talents(a, bundle):
-        if effect["hook"] == "substitute_skill" and effect["skill"] == skill:
+        if (
+            effect["hook"] == "substitute_skill"
+            and effect["skill"] == skill
+            and (effect.get("context") is None or effect["context"] == spec.get("context"))
+            and spec.get("talent_substitution", True)
+        ):
             skill = effect["to"]
             modifier_from_substitution += effect.get("value", 0)
     attribute = spec.get("attribute", SKILLS.get(skill, skill))
     if "attribute" not in spec:
         for effect in talents(a, bundle):
-            if effect["hook"] == "attribute_override" and effect["skill"] == skill:
+            if (
+                effect["hook"] == "attribute_override"
+                and effect["skill"] == skill
+                and (effect.get("context") is None or effect["context"] == spec.get("context"))
+            ):
                 attribute = effect["attribute"]
     if attribute not in ATTRIBUTES:
         raise LoreKitError("Unknown attribute substitution")
@@ -61,10 +71,53 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
     modifier = spec.get("modifier", 0)
     if type(modifier) is not int:
         raise LoreKitError("modifier must be an integer")
+    gear = spec.get("gear", [])
+    if not isinstance(gear, list) or any(not isinstance(i, str) for i in gear) or len(set(gear)) != len(gear):
+        raise LoreKitError("Gear must contain distinct inventory instance IDs")
+    from lorekit.alien.survival import item
+
+    used_gear = []
+    for instance_id in gear:
+        instance, definition = item(a, instance_id, bundle)
+        if instance.get("dropped"):
+            raise LoreKitError("Gear is not available")
+        modifiers = [
+            e["value"]
+            for e in definition.get("check_modifiers", [])
+            if e["skill"] == skill and e["context"] == spec.get("context")
+        ]
+        if not modifiers:
+            raise LoreKitError("Gear has no supported modifier for this check context")
+        modifier += sum(modifiers)
+        if definition.get("single_use"):
+            used_gear.append(instance)
     modifier += modifier_from_substitution
+    if state["scene"] and a["zone"] is not None and state["scene"]["zones"][a["zone"]].get("zero_g"):
+        immune = any(e["hook"] == "zero_g_immunity" for e in talents(a, bundle))
+        if (
+            not immune
+            and not spec.get("_zero_g_move")
+            and skill in ("close_combat", "heavy_machinery", "mobility", "ranged_combat")
+        ):
+            modifier -= 2
+    modifier -= a.get("trauma_penalties", {}).get(attribute, 0)
+    if state["combat"] and spec.get("order"):
+        matched = next(
+            (
+                order
+                for order in a.get("orders", [])
+                if order["order"] == spec["order"] and order["round"] == state["combat"]["round"]
+            ),
+            None,
+        )
+        if matched:
+            modifier += matched["bonus"]
+            a["orders"].remove(matched)
     for injury in a["injuries"]:
         for effect in injury["effects"]:
             if effect["hook"] == "injury_modifier" and skill in effect.get("skills", []):
+                if effect.get("condition") and not spec.get(effect["condition"], False):
+                    continue
                 modifier += effect["value"]
     if effects.STRESS_ATTRIBUTE[attribute] in a["stress_responses"]:
         modifier -= 2
@@ -100,6 +153,10 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
         helpers=len(helpers),
         stress=max(0, use_stress - omit),
     )
+    for instance in used_gear:
+        instance["quantity"] -= 1
+        if not instance["quantity"]:
+            instance["equipped"] = False
     check = {
         "actor": spec["actor"],
         "attribute": attribute,
@@ -116,16 +173,36 @@ def roll(state: dict, spec: dict, bundle: dict, rng) -> dict:
         event = effects.stress_response(a, rng)
         check["events"].append(event)
         check["forced_failure"] = event.get("forced_failure", False)
+    if skill == "mobility":
+        from lorekit.alien.survival import supply, sync_air
+
+        for instance in a["inventory"]:
+            if instance.get("equipped") and instance.get("active_air") and not instance.get("dropped"):
+                check["events"].append(supply(a, instance["id"], bundle, rng))
+        sync_air(state, spec["actor"])
+    check["events"].extend(bleeding(state, spec["actor"], skill, bundle, rng))
     return check
+
+
+def bleeding(state, aid, skill, bundle, rng):
+    from lorekit.alien.survival import damage
+
+    a = actor(state, aid)
+    events = []
+    for injury in list(a["injuries"]):
+        for effect in injury["effects"]:
+            if effect["hook"] == "bleeding_on_skill" and skill in effect.get("skills", []):
+                events.extend(damage(state, aid, effect["value"], bundle, rng, bypass=True))
+    return events
 
 
 def start(state: dict, intent: dict, bundle: dict, rng, *, queued=False) -> dict:
     if state["pending"] is not None or (state["queue"] and not queued):
         raise LoreKitError("Resolve pending effects before starting a check")
     checks = [roll(state, intent, bundle, rng)]
-    opponent = intent.get("opponent")
-    if opponent is not None:
-        if not isinstance(opponent, dict) or opponent.get("actor") == intent.get("actor"):
+    opponents = ([intent["opponent"]] if intent.get("opponent") is not None else []) + intent.get("opponents", [])
+    for opponent in opponents:
+        if not isinstance(opponent, dict) or (opponent.get("actor") == intent.get("actor") and not intent.get("_area")):
             raise LoreKitError("Opposed check needs a distinct actor specification")
         checks.append(roll(state, opponent, bundle, rng))
     pending = {
@@ -184,12 +261,16 @@ def decide(state: dict, intent: dict, bundle: dict, rng) -> dict:
     a = actor(state, check["actor"])
     choice = intent.get("choice")
     if choice == "accept":
+        if a.get("trauma_traits", {}).get("must_push") and permission(a, check, bundle):
+            raise LoreKitError("Obsessive trauma requires pushing this eligible roll")
         p["index"] += 1
     elif choice == "push":
         if not permission(a, check, bundle):
             raise LoreKitError("This check cannot be pushed")
         cost = 2 if "jumpy" in a["stress_responses"] else 1
+        before_stress = a["stress"]
         effects.stress(a, cost)
+        cost = a["stress"] - before_stress
         check["pushes"] += 1
         for key in ("base", "stress"):
             check["roll"][key] = [d if d == 6 else rng.randint(1, 6) for d in check["roll"][key]]
@@ -198,6 +279,7 @@ def decide(state: dict, intent: dict, bundle: dict, rng) -> dict:
             event = effects.stress_response(a, rng)
             check["events"].append(event)
             check["forced_failure"] |= event.get("forced_failure", False)
+        check["events"].extend(bleeding(state, check["actor"], check["skill"], bundle, rng))
     elif choice == "story_point":
         index = integer(intent.get("die"), "base die index", 0)
         if a["kind"] != "pc" or not a["story_points"] or index >= len(check["roll"]["base"]):

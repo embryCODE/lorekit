@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 
 from lorekit.alien import effects
 from lorekit.alien.characters import talents
@@ -12,8 +13,8 @@ from lorekit.db import LoreKitError
 
 def item(a, instance_id, bundle):
     entry = next((i for i in a["inventory"] if i["id"] == instance_id), None)
-    if entry is None:
-        raise LoreKitError("Inventory instance not found")
+    if entry is None or entry.get("quantity", 0) <= 0:
+        raise LoreKitError("Inventory instance not found or consumed")
     definition = bundle["collections"].get("items", {}).get(entry["content_id"])
     if definition is None:
         raise LoreKitError("Required item content is missing")
@@ -44,7 +45,7 @@ def supply(a, instance_id, bundle, rng, *, npc_roll=False):
     return {"type": "supply", "item": instance_id, "dice": dice, "remaining": entry["supply"]}
 
 
-def injury(state, aid, bundle, rng):
+def injury(state, aid, bundle, rng, *, forced=None):
     a = actor(state, aid)
     entries = bundle["collections"].get("injuries", {})
     outcomes = {str(t * 10 + u) for t in range(1, 7) for u in range(1, 7)}
@@ -52,15 +53,36 @@ def injury(state, aid, bundle, rng):
         raise LoreKitError("Damage requires a complete local D66 injury table")
     dice_log = []
     existing = {i["id"] for i in a["injuries"]}
+    if forced is not None and str(forced) not in entries:
+        raise LoreKitError("Missing signature-specific critical injury")
     while True:
-        dice = [rng.randint(1, 6), rng.randint(1, 6)]
+        dice = [forced // 10, forced % 10] if forced is not None else [rng.randint(1, 6), rng.randint(1, 6)]
         dice_log.append(dice)
         value = dice[0] * 10 + dice[1]
-        if value < 14 or str(value) not in existing:
+        if forced is not None or value < 14 or str(value) not in existing:
             break
         if len(dice_log) > 1000:
             raise LoreKitError("Injury reroll safety limit reached; retry with an explicit ruling")
-    definition = entries[str(value)]
+    if forced is None and any(e["hook"] == "lucky" for e in talents(a, bundle)):
+        second_log = []
+        for _ in range(1000):
+            dice = [rng.randint(1, 6), rng.randint(1, 6)]
+            second_log.append(dice)
+            second = dice[0] * 10 + dice[1]
+            if second < 14 or str(second) not in existing:
+                break
+        else:
+            raise LoreKitError("Lucky injury reroll limit reached")
+        state["queue"].append(
+            {"type": "lucky_injury", "actor": aid, "values": [value, second], "dice": [dice_log, second_log]}
+        )
+        return {"type": "critical_injury_choice_queued", "actor": aid, "values": [value, second]}
+    return apply_injury(state, aid, bundle, rng, value, dice_log)
+
+
+def apply_injury(state, aid, bundle, rng, value, dice_log):
+    a = actor(state, aid)
+    definition = bundle["collections"]["injuries"][str(value)]
     interval = definition.get("interval")
     entry = {
         "id": str(value),
@@ -69,9 +91,27 @@ def injury(state, aid, bundle, rng):
         "stabilized": False,
         "successes": 0,
         "interval": interval,
-        "due": state["clocks"].get(interval, 0) + 1 if interval else None,
+        "due": (
+            a.get("turns_completed", 0) if interval == "round" and state["combat"] else state["clocks"].get(interval, 0)
+        )
+        + 1
+        if interval
+        else None,
+        "due_unit": "turn" if interval == "round" and state["combat"] else interval,
         "surgery_required": definition.get("surgery", False),
     }
+    healing = definition.get("healing")
+    if healing:
+        expression = healing["amount"]
+        match = re.fullmatch(r"([1-4])d6", expression) if isinstance(expression, str) else None
+        if match:
+            healing_dice = [rng.randint(1, 6) for _ in range(int(match[1]))]
+            entry["healing_remaining"] = sum(healing_dice)
+            entry["healing_dice"] = healing_dice
+        else:
+            entry["healing_remaining"] = integer(expression, "healing duration", 1)
+        entry["healing_unit"] = healing["unit"]
+        entry["prosthesis_required"] = definition.get("prosthesis", False)
     if definition.get("instant_death"):
         a["dead"] = True
     a["injuries"].append(entry)
@@ -80,6 +120,10 @@ def injury(state, aid, bundle, rng):
             a["stress"] = 0
         elif e["hook"] == "stress_gain":
             effects.stress(a, e["value"])
+        elif e["hook"] == "infection":
+            state["queue"].append({"type": "injury_infection", "actor": aid, "penalty": e.get("value", 0)})
+        elif e["hook"] == "trauma" and state["options"]["mental_trauma"]:
+            state["queue"].append({"type": "direct_trauma", "actor": aid})
     return {"type": "critical_injury", "actor": aid, "dice": dice_log, "injury": str(value)}
 
 
@@ -108,10 +152,16 @@ def damage(
         amount = 0
     else:
         amount = max(0, amount - barrier)
-    armor = 0 if bypass else max(0, a["armor"] - reduction)
+    armor_base = a["armor"]
+    if fire and a["species"] == "xenomorph":
+        armor_base = min(armor_base, bundle["collections"]["creatures"][a["content_id"]].get("armor_fire", armor_base))
+    armor = 0 if bypass else max(0, armor_base - reduction)
     actual = max(0, amount - armor)
+    actual, resistance_dice = resist(a, actual, bundle, rng)
     before = a["health"]
     events = [{"type": "damage", "actor": aid, "incoming": amount, "armor": armor, "inflicted": actual}]
+    if resistance_dice:
+        events[0]["resistance_dice"] = resistance_dice
     if not actual:
         return events
     a["health"] = max(0, before - actual)
@@ -119,6 +169,7 @@ def damage(
         a["dead"] = True
     elif a["health"] == 0:
         effects.stop_panic(a)
+        a.pop("overkill", None)
         if a["species"] == "xenomorph":
             from lorekit.alien.creatures import broken
 
@@ -140,6 +191,8 @@ def damage(
             events.append({"type": "system_damage", "actor": aid, "die": rolled, "result": value})
         else:
             events.append(injury(state, aid, bundle, rng))
+    if before > 0 and a["health"] == 0:
+        a.pop("self_rally_attempted", None)
     if before > 0 and a["health"] == 0 and a["species"] == "human" and a["kind"] == "pc":
         from lorekit.alien.scenes import line_of_sight
 
@@ -147,10 +200,11 @@ def damage(
             if other_id != aid and effects.eligible(other) and line_of_sight(state, other_id, aid):
                 effects.enqueue_panic(state, other_id, "witnessed_pc_broken")
     if a["species"] == "xenomorph" and not fire:
-        from lorekit.alien.acid import initial
+        from lorekit.alien.acid import initial, initial_floor
 
         rating = bundle["collections"]["creatures"][a["content_id"]].get("acid", 0)
         if rating:
+            events.extend(initial_floor(state, a["zone"], rating + min(actual, a["health_max"]), rng))
             for target_id in a.get("adjacent", []):
                 if not actor(state, target_id)["dead"]:
                     events.append(initial(state, target_id, rating + min(actual, a["health_max"]), bundle, rng))
@@ -179,16 +233,38 @@ def rest(state, intent, bundle, rng):
     removals = intent.get("remove_responses", {})
     if len(ids) == 1 and "remove_response" in intent:
         removals = {ids[0]: intent["remove_response"]}
+    can_relieve = {}
     for aid, a in zip(ids, participants, strict=True):
-        if a["stress_responses"] and removals.get(aid) not in a["stress_responses"]:
+        traits = a.get("trauma_traits", {})
+        alone = not any(
+            other is not a and other["zone"] == a["zone"] and not other["dead"] for other in state["actors"].values()
+        )
+        allowed = not (
+            traits.get("rest_alone") and not alone or traits.get("rest_alcohol") and intent.get("alcohol") is not True
+        )
+        allowed &= a.get("no_stress_recovery_until_day", -1) <= state["clocks"]["day"]
+        allowed &= a.get("counselor_stretch", -1) < state["clocks"]["stretch"]
+        can_relieve[aid] = allowed
+        if allowed and a["stress_responses"] and removals.get(aid) not in a["stress_responses"]:
             raise LoreKitError("Choose one active stress response to remove per affected actor")
     advance_time(state, "stretch", 1)
     for aid, a in zip(ids, participants, strict=True):
         if a["species"] == "human" and not a["fatigued"] and not a.get("hotspot"):
             a["health"] = min(a["health_max"], a["health"] + 1)
-        a["stress"] = max(0, a["stress"] - 1)
-        if a["stress_responses"]:
-            a["stress_responses"].remove(removals[aid])
+        if can_relieve[aid]:
+            aura = max(
+                [0]
+                + [
+                    e["value"]
+                    for other in state["actors"].values()
+                    if other["zone"] == a["zone"] and not other["dead"]
+                    for e in talents(other, bundle)
+                    if e["hook"] == "rest_bonus"
+                ]
+            )
+            a["stress"] = max(0, a["stress"] - 1 - aura)
+            if a["stress_responses"]:
+                a["stress_responses"].remove(removals[aid])
     return {"type": "rest", "actors": ids, "events": effects.drain(state, rng, bundle=bundle)}
 
 
@@ -211,6 +287,27 @@ def due_events(state, unit):
     for aid, a in sorted(state["actors"].items()):
         if a["dead"]:
             continue
+        for injury in list(a["injuries"]):
+            if (
+                injury.get("healing_unit") == unit
+                and not injury.get("surgery_required")
+                and not injury.get("prosthesis_required")
+            ):
+                injury["healing_remaining"] -= 2 if unit == "day" and a.get("nursed_until_day") == now else 1
+                if injury["healing_remaining"] <= 0:
+                    a["injuries"].remove(injury)
+        hug = a.get("facehug")
+        if hug and unit == "stretch" and hug["stage"] == "attached" and not hug["inseminated"]:
+            state["queue"].append({"type": "infection", "kind": "exposure", "actor": aid})
+        if hug and unit == "shift" and hug["shift_due"] <= now:
+            state["queue"].append({"type": "infection", "kind": "shift", "actor": aid})
+        if unit == "shift" and a.get("mature_due", now + 1) <= now:
+            state["queue"].append({"type": "mature", "actor": aid})
+        if a.get("hotspot") and a.get("radiation_unit") == unit and a["radiation_due"] <= now:
+            state["queue"].append({"type": "radiation", "actor": aid})
+            a["radiation_due"] = now + 1
+        elif unit == "shift" and not a.get("hotspot"):
+            a["rads"] = max(0, a["rads"] - 1)
         if unit == "stretch":
             effects.stop_panic(a)
             for inventory in a["inventory"]:
@@ -218,7 +315,7 @@ def due_events(state, unit):
                 if inventory.get("equipped") and inventory.get("active_air"):
                     state["queue"].append({"type": "due", "kind": "air_supply", "actor": aid, "item": inventory["id"]})
         for i in a["injuries"]:
-            if i["lethal"] and not i["stabilized"] and i["interval"] == unit and i["due"] <= now:
+            if i["lethal"] and not i["stabilized"] and i.get("due_unit", i["interval"]) == unit and i["due"] <= now:
                 state["queue"].append({"type": "due", "kind": "death", "actor": aid, "injury": i["id"]})
                 i["due"] = now + 1
         for hazard in a.get("hazards", []):
@@ -233,13 +330,28 @@ def due(state, entry, bundle, rng):
     a = actor(state, entry["actor"])
     if a["dead"]:
         return {"type": "due_skipped", "actor": entry["actor"]}
+    if entry["kind"] == "stun_recovery":
+        return checks.start(
+            state,
+            {"actor": entry["actor"], "skill": "stamina", "continuation": {"kind": "stun", "actor": entry["actor"]}},
+            bundle,
+            rng,
+            queued=True,
+        )
     if entry["kind"] == "air_supply":
-        return supply(a, entry["item"], bundle, rng)
+        result = supply(a, entry["item"], bundle, rng)
+        sync_air(state, entry["actor"])
+        return result
     spec = {"actor": entry["actor"], "continuation": {"kind": "due", "entry": entry}}
     if entry["kind"] == "death":
         if not any(i["id"] == entry["injury"] and not i["stabilized"] for i in a["injuries"]):
             return {"type": "due_skipped"}
-        spec.update(skill="stamina", no_push=True, no_stress=True)
+        spec.update(
+            skill="stamina",
+            no_push=True,
+            no_stress=True,
+            modifier=sum(e["value"] for e in talents(a, bundle) if e["hook"] == "death_modifier"),
+        )
     else:
         hazard = next(h for h in a["hazards"] if h["id"] == entry["hazard"])
         if hazard["kind"] == "hypersleep":
@@ -247,7 +359,12 @@ def due(state, entry, bundle, rng):
             a["fatigued"] = bool(a["hazards"])
             return {"type": "hypersleep_recovered", "actor": entry["actor"]}
         if hazard["kind"] == "environmental_death":
-            spec.update(skill="stamina", no_push=True, no_stress=True)
+            spec.update(
+                skill="stamina",
+                no_push=True,
+                no_stress=True,
+                modifier=sum(e["value"] for e in talents(a, bundle) if e["hook"] == "death_modifier"),
+            )
             return checks.start(state, spec, bundle, rng, queued=True)
         spec.update(skill="stamina" if hazard["kind"] == "disease" else "survival", modifier=-hazard.get("penalty", 0))
         if hazard["kind"] == "vacuum":
@@ -259,6 +376,33 @@ def due(state, entry, bundle, rng):
 def finish_due(state, result, bundle, rng):
     entry = result["continuation"]["entry"]
     a = actor(state, entry["actor"])
+    is_death = entry["kind"] == "death" or (
+        entry.get("hazard") is not None
+        and any(h["id"] == entry["hazard"] and h["kind"] == "environmental_death" for h in a.get("hazards", []))
+    )
+    if is_death and not result.get("lucky_chosen") and any(e["hook"] == "lucky" for e in talents(a, bundle)):
+        from lorekit.alien import checks
+
+        reroll = checks.roll(
+            state,
+            {
+                "actor": entry["actor"],
+                "skill": "stamina",
+                "no_push": True,
+                "no_stress": True,
+                "modifier": sum(e["value"] for e in talents(a, bundle) if e["hook"] == "death_modifier"),
+            },
+            bundle,
+            rng,
+        )
+        second = {
+            **copy.deepcopy(result),
+            "checks": [reroll],
+            "successes": [checks.successes(reroll)],
+            "success": checks.successes(reroll) > 0,
+        }
+        state["pending"] = {"type": "lucky_death", "actor": entry["actor"], "results": [copy.deepcopy(result), second]}
+        return {"type": "lucky_death", "pending": copy.deepcopy(state["pending"]), "events": []}
     success = result["success"]
     events = [{"type": "due_result", "kind": entry["kind"], "actor": entry["actor"], "checks": result["checks"]}]
     if entry["kind"] == "death":
@@ -284,7 +428,11 @@ def finish_due(state, result, bundle, rng):
             a["fatigued"] = bool(a["hazards"])
         elif not success:
             if a["fatigued"]:
-                a["health"] = max(0, a["health"] - 1)
+                amount, dice = resist(a, 1, bundle, rng)
+                a["health"] = max(0, a["health"] - amount)
+                events.append(
+                    {"type": "fatigue_damage", "actor": entry["actor"], "inflicted": amount, "resistance_dice": dice}
+                )
             a["fatigued"] = True
             effects.stress(a, 1)
             if a["health"] == 0:
@@ -295,17 +443,41 @@ def finish_due(state, result, bundle, rng):
     return {"type": "due_complete", "events": events}
 
 
-def hazard(state, intent):
+def hazard(state, intent, bundle, rng):
     a = actor(state, intent.get("actor"))
     kind = intent.get("kind")
     if kind not in ("air", "hunger", "sleep", "cold", "heat", "hypersleep", "vacuum", "disease"):
         raise LoreKitError("Unsupported hazard; explicit GM ruling required")
-    if a["species"] == "synthetic":
+    if (
+        a["species"] == "synthetic"
+        or (a["species"] == "xenomorph" and kind in ("cold", "vacuum", "air"))
+        or (kind == "vacuum" and a.get("vacuum_proof"))
+    ):
         return {"type": "hazard_immune", "actor": intent["actor"]}
     unit = intent.get("unit", "round" if kind in ("air", "vacuum") else "shift")
     if unit not in state["clocks"]:
         raise LoreKitError("Invalid hazard cadence")
     a.setdefault("hazards", [])
+    if kind == "disease":
+        from lorekit.alien import checks
+
+        return checks.start(
+            state,
+            {
+                "actor": intent["actor"],
+                "skill": "stamina",
+                "passive": True,
+                "modifier": -integer(intent.get("penalty", 0), "virulence"),
+                "continuation": {
+                    "kind": "disease_exposure",
+                    "actor": intent["actor"],
+                    "unit": unit,
+                    "penalty": intent.get("penalty", 0),
+                },
+            },
+            bundle,
+            rng,
+        )
     if any(h["id"] == kind for h in a["hazards"]):
         raise LoreKitError("Hazard already active")
     if kind == "hypersleep":
@@ -338,6 +510,8 @@ def recover(state, intent, bundle, rng):
         raise LoreKitError("Use creature-specific recovery")
     if method in ("first_aid", "rally") and target["species"] != "human":
         raise LoreKitError("Synthetic requires repairs")
+    if method == "rally" and target.get("trauma_traits", {}).get("no_rally"):
+        raise LoreKitError("This trauma prevents rallying")
     if method == "rally" and target["health"] > 0:
         raise LoreKitError("Only broken actors can be rallied")
     if (
@@ -346,7 +520,14 @@ def recover(state, intent, bundle, rng):
         and not any(i["lethal"] and not i["stabilized"] for i in target["injuries"])
     ):
         raise LoreKitError("First aid cannot heal a healthy actor")
-    if helper_id == target_id and (method != "first_aid" or helper["health"] == 0):
+    self_rally = (
+        helper_id == target_id and method == "rally" and any(e["hook"] == "self_rally" for e in talents(helper, bundle))
+    )
+    if self_rally:
+        if helper.get("self_rally_attempted"):
+            raise LoreKitError("Self-rally has already been attempted for this broken state")
+        helper["self_rally_attempted"] = True
+    if not self_rally and helper_id == target_id and (method != "first_aid" or helper["health"] == 0):
         if method != "repair":
             raise LoreKitError("This recovery cannot be performed on yourself")
     if (
@@ -370,8 +551,11 @@ def recover(state, intent, bundle, rng):
         selected = intent.get("injury")
         if not any(i["id"] == selected and i["surgery_required"] for i in target["injuries"]):
             raise LoreKitError("Select an injury requiring surgery")
-    scenes.spend(state, helper_id, "quick" if method == "rally" else "full")
+    if not self_rally:
+        scenes.spend(state, helper_id, "quick" if method == "rally" else "full")
     skill = "command" if method in ("rally", "stop_panic") else "comtech" if method == "repair" else "medical_aid"
+    if self_rally:
+        skill = "stamina"
     modifier = -2 if helper_id == target_id and method == "first_aid" else 0
     return checks.start(
         state,
@@ -380,6 +564,8 @@ def recover(state, intent, bundle, rng):
             "skill": skill,
             "modifier": modifier,
             "context": method,
+            "no_push": self_rally,
+            "gear": intent.get("gear", []),
             "continuation": {"kind": "recover", "method": method, "target": target_id, "injury": intent.get("injury")},
         },
         bundle,
@@ -416,7 +602,12 @@ def finish_recover(state, result, bundle, rng):
                 target["dead"] = True
             else:
                 injury["interval"] = {"shift": "stretch", "stretch": "round"}[injury["interval"]]
-                injury["due"] = state["clocks"][injury["interval"]] + 1
+                injury["due_unit"] = "turn" if injury["interval"] == "round" and state["combat"] else injury["interval"]
+                injury["due"] = (
+                    target.get("turns_completed", 0)
+                    if injury["due_unit"] == "turn"
+                    else state["clocks"][injury["interval"]]
+                ) + 1
     return {
         "type": "recovery_complete",
         "method": method,
@@ -455,3 +646,69 @@ def finish_stun(state, result):
         "stunned": a["stunned"],
         "checks": result["checks"],
     }
+
+
+def finish_exposure(state, result):
+    data = result["continuation"]
+    a = actor(state, data["actor"])
+    if not result["success"]:
+        if not any(h["id"] == "disease" for h in a["hazards"]):
+            a["hazards"].append(
+                {
+                    "id": "disease",
+                    "kind": "disease",
+                    "unit": data["unit"],
+                    "penalty": data["penalty"],
+                    "due": state["clocks"][data["unit"]] + 1,
+                }
+            )
+        a["fatigued"] = True
+    return {"type": "disease_exposure", "infected": not result["success"], "checks": result["checks"]}
+
+
+def remedy(state, intent):
+    a = actor(state, intent.get("actor"))
+    if not isinstance(intent.get("reason"), str) or not intent["reason"].strip():
+        raise LoreKitError("Remedy requires a concrete GM reason")
+    selected = next((h for h in a.get("hazards", []) if h["id"] == intent.get("hazard")), None)
+    if selected is None:
+        raise LoreKitError("Hazard not active")
+    a["hazards"].remove(selected)
+    a["fatigued"] = any(
+        h["kind"] in ("air", "hunger", "cold", "heat", "sleep", "disease", "hypersleep") for h in a["hazards"]
+    )
+    return {"type": "hazard_remedied", "actor": intent["actor"], "hazard": selected["id"], "reason": intent["reason"]}
+
+
+def sync_air(state, aid):
+    a = actor(state, aid)
+    if a["species"] != "human":
+        return
+    active = [i for i in a["inventory"] if i.get("active_air") and i.get("equipped") and not i.get("dropped")]
+    if active and all(i["supply"] == 0 for i in active):
+        if not any(h["id"] == "air" for h in a.setdefault("hazards", [])):
+            a["hazards"].append(
+                {"id": "air", "kind": "air", "unit": "round", "penalty": 0, "due": state["clocks"]["round"] + 1}
+            )
+
+
+def injury_decide(state, intent, bundle, rng):
+    p = state["pending"]
+    if not p or p["type"] not in ("lucky_injury", "lucky_death") or p["actor"] != intent.get("actor"):
+        raise LoreKitError("No matching Lucky decision")
+    choice = integer(intent.get("choice"), "Lucky result index", 0, 1)
+    state["pending"] = None
+    if p["type"] == "lucky_injury":
+        result = apply_injury(state, p["actor"], bundle, rng, p["values"][choice], p["dice"][choice])
+    else:
+        result = finish_due(state, {**p["results"][choice], "lucky_chosen": True}, bundle, rng)
+    result["events"] = result.get("events", []) + effects.drain(state, rng, bundle=bundle)
+    return result
+
+
+def resist(a, amount, bundle, rng):
+    dice = []
+    if amount and any(e["hook"] == "resilient" for e in talents(a, bundle)):
+        dice = [rng.randint(1, 6) for _ in range(a["attributes"]["strength"])]
+        amount = max(0, amount - dice.count(6))
+    return amount, dice

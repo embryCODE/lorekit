@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 
 from lorekit.alien import checks, scenes, survival
+from lorekit.alien.characters import bonus
 from lorekit.alien.state import actor
 from lorekit.db import LoreKitError
 
@@ -23,10 +24,25 @@ def observation(state, aid, bundle, rng, *, active=False, modifier=0):
 
 def detect(state, first, second, bundle, rng, before=None):
     # Highest roll represents each group; each participant rolls individually.
-    rolls = [[observation(state, aid, bundle, rng) for aid in group] for group in (first, second)]
+    groups = (first, second)
+    rolls = []
+    for index, group in enumerate(groups):
+        opposing = groups[1 - index]
+        stealth_penalty = min(
+            [
+                bundle["collections"]
+                .get("creatures", {})
+                .get(actor(state, bid).get("content_id"), {})
+                .get("stealth_penalty", 0)
+                + bonus(actor(state, bid), bundle, "stealth_penalty")
+                for bid in opposing
+            ]
+            or [0]
+        )
+        rolls.append([observation(state, aid, bundle, rng, modifier=-stealth_penalty) for aid in group])
     values = [max(checks.successes(c) for c in group) for group in rolls]
     if values[0] == values[1]:
-        return scenes.start_combat(state, {"actors": first + second}, rng)
+        return scenes.start_combat(state, {"actors": first + second}, rng, bundle)
     winner = first if values[0] > values[1] else second
     state["pending"] = {
         "type": "detection",
@@ -59,7 +75,7 @@ def act(state, intent, bundle, rng):
     if action == "move":
         destination = intent.get("zone")
         for member in group:
-            events.append(scenes.move(state, member, destination, bundle))
+            events.append(scenes.move(state, member, destination, bundle, rng=rng))
     elif action == "hide":
         for member in group:
             if not scene["zones"][actor(state, member)["zone"]].get("cluttered"):
@@ -149,13 +165,16 @@ def decide(state, intent, bundle, rng):
         for aid in p["winner"]:
             if aid not in p["before"]:
                 raise LoreKitError("Winning side has no recorded entry route; GM ruling required")
-            scenes.move(state, aid, p["before"][aid], bundle, forced=True)
+            scenes.move(state, aid, p["before"][aid], bundle, forced=True, rng=rng)
     elif choice in ("reveal", "ambush"):
         for aid in p["first"] + p["second"]:
             actor(state, aid)["revealed"] = True
         state["pending"] = None
         return scenes.start_combat(
-            state, {"actors": p["first"] + p["second"], "surprise": p["winner"] if choice == "ambush" else []}, rng
+            state,
+            {"actors": p["first"] + p["second"], "surprise": p["winner"] if choice == "ambush" else []},
+            rng,
+            bundle,
         )
     else:
         raise LoreKitError("Choose reveal, ambush, hide or back_out")
