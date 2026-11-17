@@ -1,8 +1,9 @@
 # Alien Evolved local reference content
 
-Alien support is experimental; independent acceptance verification remains pending. The current resolver identifies itself as
-`evolved-beta2`, not the final Evolved Edition. Do not treat the presence of a tool
-as proof that the entire cinematic rules checklist is complete.
+Alien support is experimental and passed independent acceptance review for the
+scoped cinematic loop on 2026-11-17. The resolver identifies itself as
+`evolved-beta2`; deferred subsystems and final-edition reconciliation remain
+outside this profile.
 
 Content is imported through `alien_content_import` before creating actors. The
 source PDF and its extracted text stay outside git. Bundles are canonical JSON,
