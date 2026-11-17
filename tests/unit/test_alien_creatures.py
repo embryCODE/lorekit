@@ -408,3 +408,76 @@ def test_attached_parasite_moves_with_host_and_stasis_pauses_its_clock():
     effects.drain(s, random.Random(1), bundle=b)
     assert s["actors"]["host-burster"]["content_id"] == "adult"
     validate_snapshot(s)
+
+
+def test_facehugger_automatically_attaches_to_injury_immobilized_host():
+    import random
+
+    from lorekit.alien import creatures, scenes
+    from lorekit.alien.characters import build
+    from lorekit.alien.state import initial
+
+    b = {
+        "collections": {
+            "creatures": {
+                "parasite": {
+                    "stage": "facehugger",
+                    "health": 2,
+                    "speed": 1,
+                    "skills": {},
+                    "attacks": {
+                        str(i): {"id": str(i), "actions": [{"hook": "stress", "value": 1}]} for i in range(1, 7)
+                    },
+                }
+            }
+        }
+    }
+    s = initial()
+    s["actors"]["parasite"] = creatures.build("parasite", "Example", b)
+    host = s["actors"]["host"] = build(
+        {"name": "Host", "attributes": dict(strength=3, agility=3, wits=3, empathy=3)}, b, imported=True
+    )
+    host["injuries"] = [
+        {"id": "example", "effects": [{"hook": "immobile"}], "interval": None, "lethal": False, "stabilized": True}
+    ]
+    scenes.setup(s, {"zones": {"room": {}}, "placements": {"parasite": "room", "host": "room"}})
+    scenes.approach(s, "parasite", "host", b, paid=True)
+    scenes.start_combat(s, {"actors": ["parasite", "host"]}, random.Random(1))
+    creatures.act(s, {"actor": "parasite", "target": "host", "feasible": [1]}, b, random.Random(1), immediate=True)
+    assert "facehug" in host
+    assert host["unconscious"] and s["actors"]["parasite"]["attached_to"] == "host"
+
+
+def test_signature_instant_kill_triggers_witness_panic_after_nonbreaking_hit():
+    import random
+
+    from lorekit.alien import creatures, scenes
+    from lorekit.alien.characters import build
+    from lorekit.alien.state import initial
+
+    b = {"collections": {"creatures": {"hunter": {"health": 3, "speed": 1, "skills": {}}}}}
+    s = initial()
+    s["actors"]["hunter"] = creatures.build("hunter", "Hunter", b)
+    for aid in ("host", "witness"):
+        s["actors"][aid] = build(
+            {"name": aid, "attributes": dict(strength=3, agility=3, wits=3, empathy=3)}, b, imported=True
+        )
+    scenes.setup(s, {"zones": {"room": {}}, "placements": {aid: "room" for aid in s["actors"]}})
+    s["pending"] = {
+        "type": "signature",
+        "execution": {
+            "actor": "hunter",
+            "target": "host",
+            "actions": [{"hook": "instant_kill", "when": "damage"}],
+            "index": 0,
+            "hit": True,
+            "damage": True,
+            "die": 6,
+            "choices": {},
+        },
+    }
+    s["actors"]["host"]["panic_responses"] = [5]
+    creatures.resume(s, b, random.Random(1))
+    assert s["actors"]["host"]["dead"] and s["actors"]["host"]["health"] == 0
+    assert s["actors"]["host"]["panic_responses"] == []
+    assert "highest_panic" in s["actors"]["witness"]

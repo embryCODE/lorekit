@@ -168,3 +168,77 @@ def test_sleep_loss_forces_one_shift_and_hypersleep_needs_a_meal():
         s, {"actor": "example", "hazard": "hypersleep", "reason": "Awake for a shift with a meal", "meal": True}
     )
     assert not a["fatigued"]
+
+
+@pytest.mark.parametrize("operation", ["supply", "winded"])
+def test_empty_active_air_immediately_schedules_suffocation(operation, monkeypatch):
+    from lorekit.alien import decisions, engine
+
+    class Ones:
+        def randint(self, low, high):
+            return 1
+
+    s, b = setup()
+    b["collections"]["items"]["meter"]["supply_type"] = "air"
+    a = s["actors"]["example"]
+    a["inventory"][0].update(supply=1, active_air=True, equipped=True)
+    monkeypatch.setattr(content, "read", lambda fingerprint: b)
+    if operation == "supply":
+        engine.transition(s, {"op": "supply", "actor": "example", "item": "meter"}, Ones())
+    else:
+        s["pending"] = {"type": "panic_choice", "actor": "example", "result": 3}
+        decisions.panic(s, {"actor": "example", "item": "meter"}, b, Ones())
+    assert a["inventory"][0]["supply"] == 0
+    air = next(h for h in a["hazards"] if h["id"] == "air")
+    assert air["unit"] == "round" and air["due"] == s["clocks"]["round"] + 1
+
+
+def test_injury_table_ids_62_and_63_remain_distinct_from_example_prose():
+    s, b = setup()
+    for key, penalty, surgery in (("62", -2, False), ("63", -3, True)):
+        b["collections"]["injuries"][key].update(
+            effects=[{"hook": "injury_modifier", "skills": ["stamina"], "value": penalty}],
+            lethal=True,
+            interval="round",
+            surgery=surgery,
+        )
+    for value, penalty, surgery in ((62, -2, False), (63, -3, True)):
+        survival.injury(s, "example", b, random.Random(1), forced=value)
+        injury = s["actors"]["example"]["injuries"][-1]
+        assert injury["id"] == str(value)
+        assert injury["effects"][0]["value"] == penalty and injury["surgery_required"] is surgery
+
+
+@pytest.mark.parametrize("restriction", [None, "fatigue", "hotspot", "synthetic", "attached"])
+def test_one_stretch_self_recovery_preserves_injuries_and_honors_restrictions(restriction):
+    from lorekit.alien import effects
+
+    s, b = setup()
+    a = s["actors"]["example"]
+    a["health"] = 0
+    a["injuries"] = [
+        {
+            "id": "example",
+            "effects": [],
+            "lethal": True,
+            "stabilized": False,
+            "due_unit": "shift",
+            "interval": "shift",
+            "due": 3,
+        }
+    ]
+    if restriction == "fatigue":
+        a["fatigued"] = True
+    elif restriction == "hotspot":
+        a["hotspot"] = True
+    elif restriction == "synthetic":
+        a["species"] = "synthetic"
+    elif restriction == "attached":
+        a["facehug"] = {"stage": "attached", "shift_due": 1, "inseminated": True}
+        a["unconscious"] = True
+    survival.advance_time(s, "stretch", 1)
+    if restriction != "synthetic":
+        assert s["queue"][-1]["kind"] == "natural_recovery"
+    effects.drain(s, random.Random(1), bundle=b)
+    assert a["health"] == (1 if restriction is None else 0)
+    assert a["injuries"][0]["due"] == 3 and not a["injuries"][0]["stabilized"]

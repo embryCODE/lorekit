@@ -54,3 +54,37 @@ def test_attack_declares_before_roll_and_replays(make_session):
     assert out["events"][0]["checks"][0]["pushes"] == 0
     verify(load(db, sid))
     db.close()
+
+
+def test_known_full_cover_exception_does_not_reveal_unknown_target():
+    import random
+
+    import pytest
+
+    from lorekit.alien import characters, combat, scenes
+    from lorekit.alien.state import initial
+    from lorekit.db import LoreKitError
+
+    b = {"collections": {"items": {"weapon": {"damage": 1, "maximum": 2}}}}
+    s = initial()
+    for aid in ("a", "b"):
+        s["actors"][aid] = characters.build(
+            {
+                "name": aid,
+                "attributes": dict(strength=3, agility=3, wits=3, empathy=3),
+                "inventory": [{"id": "gun", "content_id": "weapon", "equipped": True}],
+            },
+            b,
+            imported=True,
+        )
+    scenes.setup(s, {"zones": {"room": {}}, "placements": {"a": "room", "b": "room"}})
+    scenes.start_combat(s, {"actors": ["a", "b"], "surprise": ["a"]}, random.Random(1))
+    s["actors"]["b"].update(cover="full", hidden=True)
+    intent = {"actor": "a", "target": "b", "weapon": "gun"}
+    with pytest.raises(LoreKitError, match="Target not visible"):
+        combat.declare(s, intent, b)
+    assert s["pending"] is None
+    result = combat.declare(s, {**intent, "known_target": True}, b)
+    assert result["type"] == "defense_required"
+    assert s["pending"]["attack"]["modifier"] == -3
+    assert s["actors"]["b"]["hidden"]

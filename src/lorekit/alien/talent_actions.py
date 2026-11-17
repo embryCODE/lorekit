@@ -17,7 +17,7 @@ def act(state, intent, bundle, rng):
     hook = intent.get("talent")
     if not any(e["hook"] == hook for e in characters.talents(a, bundle)):
         raise LoreKitError("Actor lacks this implemented talent")
-    if a["dead"] or a["health"] == 0 or a.get("unconscious"):
+    if characters.incapacitated(a):
         raise LoreKitError("Actor cannot use this talent while incapacitated")
     if hook == "company_resources":
         act_id = intent.get("act_id")

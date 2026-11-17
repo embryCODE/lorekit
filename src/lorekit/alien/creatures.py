@@ -168,6 +168,7 @@ def act(state, intent, bundle, rng, *, immediate=False):
             or target.get("immobilized_by")
             or target.get("grappled_by")
             or target.get("stunned")
+            or any(e["hook"] == "immobile" for injury in target["injuries"] for e in injury["effects"])
         )
     ):
         chosen = {"die": 6, "attack": {"actions": [{"hook": "facehug"}]}}
@@ -268,8 +269,11 @@ def resume(state, bundle, rng):
             a["grappling"] = execution["target"]
         elif hook == "instant_kill":
             if target["species"] == "human":
+                before_health = target["health"]
                 target["health"] = 0
                 target["dead"] = True
+                effects.broken_witnesses(state, execution["target"], before_health)
+                effects.stop_panic(target)
         elif hook == "facehug":
             if target["species"] != "human":
                 raise LoreKitError("Facehug requires a living biological host")

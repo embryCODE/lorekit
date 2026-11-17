@@ -212,7 +212,8 @@ def test_lucky_injury_choices_keep_both_rolls_and_do_not_apply_unselected():
     assert s["actors"]["a"]["injuries"][0]["id"] == str(p["values"][1])
 
 
-def test_bodyguard_uses_remaining_interrupt_before_damage():
+@pytest.mark.parametrize("species,health", [("human", 5), ("synthetic", 0)])
+def test_bodyguard_uses_remaining_interrupt_before_damage(species, health):
     import random
 
     from lorekit.alien import combat, scenes
@@ -230,6 +231,7 @@ def test_bodyguard_uses_remaining_interrupt_before_damage():
             b,
             imported=True,
         )
+    s["actors"]["guard"].update(species=species, health=health)
     scenes.setup(s, {"zones": {"room": {}}, "placements": {aid: "room" for aid in s["actors"]}})
     scenes.start_combat(s, {"actors": list(s["actors"]), "surprise": ["attacker"]}, random.Random(1))
     scenes.approach(s, "attacker", "target")
@@ -241,7 +243,7 @@ def test_bodyguard_uses_remaining_interrupt_before_damage():
     assert out["type"] == "hit_reaction"
     combat.hit_decide(s, {"actor": "guard", "choice": "bodyguard"}, b, random.Random(3))
     assert s["actors"]["target"]["health"] == 5
-    assert s["actors"]["guard"]["health"] == 4
+    assert s["actors"]["guard"]["health"] == max(0, health - 1)
     assert s["combat"]["budgets"]["guard"]["quick"] == 1
 
 
@@ -345,3 +347,68 @@ def test_initiative_result_exposes_resumed_panic_not_a_stale_empty_pending(make_
     assert out["pending"] == load(db, sid)["state"]["pending"]
     verify(load(db, sid))
     db.close()
+
+
+def test_hardened_uses_one_health_per_selection_and_caps_at_three():
+    b = {
+        "collections": {
+            "talents": {"hardened": {"max_selections": 3, "effects": [{"hook": "health_bonus", "value": 1}]}}
+        }
+    }
+    spec = {"name": "Example", "attributes": dict(strength=3, agility=4, wits=3, empathy=3)}
+    for count in range(4):
+        a = characters.build({**spec, "talents": ["hardened"] * count}, b, imported=True)
+        assert a["health_max"] == 4 + count
+    with pytest.raises(LoreKitError, match="selection limit"):
+        characters.build({**spec, "talents": ["hardened"] * 4}, b, imported=True)
+
+
+def test_inquisitive_only_extends_wits_pushes():
+    import random
+
+    from lorekit.alien import checks
+    from lorekit.alien.state import initial
+
+    b = {"collections": {"talents": {"inquisitive": {"effects": [{"hook": "push_attribute", "attribute": "wits"}]}}}}
+    s = initial()
+    a = characters.build(
+        {"name": "Example", "attributes": dict(strength=3, agility=3, wits=3, empathy=3), "talents": ["inquisitive"]},
+        b,
+        imported=True,
+    )
+    s["actors"]["crew"] = a
+    for skill, extra in (("observation", True), ("mobility", False), ("stamina", False), ("command", False)):
+        check = checks.roll(s, {"actor": "crew", "skill": skill}, b, random.Random(1))
+        check["pushes"] = 1
+        assert checks.permission(a, check, b) is extra
+        check["pushes"] = 2
+        assert not checks.permission(a, check, b)
+
+
+def test_fast_reflexes_does_not_give_ambusher_priority_on_second_speed_slot():
+    import random
+
+    from lorekit.alien import creatures, initiative, scenes
+    from lorekit.alien.state import initial
+
+    b = {
+        "collections": {
+            "talents": {"fast": {"effects": [{"hook": "fast_reflexes"}]}},
+            "creatures": {"hunter": {"health": 3, "speed": 2, "skills": {}}},
+        }
+    }
+    s = initial()
+    s["actors"]["crew"] = characters.build(
+        {"name": "Crew", "attributes": dict(strength=3, agility=3, wits=3, empathy=3), "talents": ["fast"]},
+        b,
+        imported=True,
+    )
+    s["actors"]["hunter"] = creatures.build("hunter", "Hunter", b)
+    scenes.setup(s, {"zones": {"room": {}}, "placements": {"crew": "room", "hunter": "room"}})
+    scenes.start_combat(s, {"actors": ["hunter", "crew"], "surprise": ["hunter"]}, random.Random(1), b)
+    pending = s["pending"]
+    assert pending["slots"] == [{"actors": ["hunter"], "card": 1}]
+    initiative.decide(s, {"actor": "crew", "card": pending["choice"]["cards"][0]}, b, random.Random(1))
+    cards = [slot["card"] for slot in s["combat"]["slots"]]
+    assert len(cards) == len(set(cards)) == 3
+    assert sum(slot["actors"] == ["hunter"] for slot in s["combat"]["slots"]) == 2

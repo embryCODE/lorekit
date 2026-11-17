@@ -46,14 +46,16 @@ def advance(state, bundle, rng):
     if p["stage"] == "keep":
         p["stage"] = "fast"
         # Surprise first-round cards and Hesitant have specific mandated draws.
+        ambushed = set()
         for unit in p["units"][:]:
             hesitant = any(6 in actor(state, aid)["panic_responses"] for aid in unit)
-            ambush = any(aid in p["surprise"] for aid in unit)
+            ambush = any(aid in p["surprise"] and aid not in ambushed for aid in unit)
             if hesitant or ambush:
                 card = max(p["deck"]) if hesitant else min(p["deck"])
                 p["deck"].remove(card)
                 p["slots"].append({"actors": unit, "card": card})
                 p["units"].remove(unit)
+                ambushed.update(unit)
         p["fast"] = [u for u in p["units"] if has(state, u, bundle, "fast_reflexes")]
         p["fast"].sort(key=lambda u: all(actor(state, aid)["kind"] != "pc" for aid in u))
     if p["fast"]:

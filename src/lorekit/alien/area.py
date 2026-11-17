@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 
 from lorekit.alien import checks, combat, effects, scenes
+from lorekit.alien.characters import incapacitated
 from lorekit.alien.state import actor
 from lorekit.db import LoreKitError
 
@@ -46,7 +47,7 @@ def decide(state, intent, bundle, rng):
             raise LoreKitError("Next secondary target must choose dodge or decline")
         target = actor(state, tid)
         if intent["choice"] == "dodge":
-            if target["species"] == "xenomorph" or target["health"] == 0 or target.get("cover") == "full":
+            if target["species"] == "xenomorph" or incapacitated(target) or target.get("cover") == "full":
                 raise LoreKitError("This target cannot dodge")
             scenes.spend(state, tid, "quick", out_of_turn=True)
         p["choices"].append(intent["choice"])

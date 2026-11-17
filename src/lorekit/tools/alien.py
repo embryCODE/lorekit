@@ -251,6 +251,8 @@ def alien_character_view(session_id: int, actor_id: str, audience: str = "public
         if audience == "gm":
             actor(state, actor_id)
         visible = projection(state, audience)
+        if actor_id not in visible["actors"]:
+            raise LoreKitError("Actor not found or not public")
         return json.dumps(
             {
                 "visibility": "gm_only" if audience == "gm" else "public",

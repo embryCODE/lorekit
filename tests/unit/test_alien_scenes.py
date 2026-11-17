@@ -170,3 +170,37 @@ def test_full_action_help_must_be_prepared_on_helpers_turn():
     assert result["type"] == "check_complete"
     assert s["combat"]["budgets"][helper]["full"]
     assert "help_offer" not in s["actors"][helper]
+
+
+def test_overkill_requires_attack_against_operating_zero_health_synthetic():
+    s = state()
+    s["actors"]["1"].update(species="synthetic", health=0, side="opposition")
+    scenes.start_combat(s, {"actors": ["0", "1"], "surprise": ["0"]}, random.Random(1))
+    s["actors"]["0"]["overkill"] = ["1"]
+    with pytest.raises(LoreKitError, match="Overkill requires attacking"):
+        scenes.end_turn(s, "0", random.Random(1), {"collections": {}})
+
+
+def test_reinforcements_join_next_round_without_refunding_existing_actions():
+    import copy
+
+    s = state()
+    scenes.start_combat(s, {"actors": ["0", "1"]}, random.Random(1))
+    scenes.spend(s, "0", "quick", out_of_turn=True)
+    before = copy.deepcopy(s["combat"])
+    result = scenes.enter_combat(s, {"actors": ["0", "2"]}, {"collections": {}}, random.Random(2))
+    assert result["initiative"] == "next_round" and result["actors"] == ["2"]
+    assert s["combat"]["slots"] == before["slots"]
+    assert s["combat"]["budgets"]["0"] == before["budgets"]["0"]
+    scenes.draw_round(s, random.Random(2))
+    assert any("2" in slot["actors"] for slot in s["combat"]["slots"])
+
+
+def test_operating_zero_health_synthetic_can_block_a_passage():
+    from lorekit.alien import actions
+
+    s = state()
+    s["actors"]["0"].update(species="synthetic", health=0)
+    actions.act(s, {"actor": "0", "action": "block", "zone": "hall"}, {"collections": {}}, random.Random(1))
+    with pytest.raises(LoreKitError, match="blocks this passage"):
+        scenes.move(s, "1", "hall", {"collections": {}})

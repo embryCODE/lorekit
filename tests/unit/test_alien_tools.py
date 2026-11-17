@@ -87,3 +87,19 @@ def test_batch_rejection_precedes_narrative_changes_and_exports_are_labeled(make
     public = json.loads(alien_scene_status(sid))
     assert "Only the GM knows" not in json.dumps(public)
     before_db.close()
+
+
+def test_legacy_mechanical_readers_redirect_and_public_actor_lookup_fails_closed(make_session):
+    from lorekit.tools.alien import alien_character_view
+    from lorekit.tools.character import character_get_abilities, character_get_attr, character_get_items
+
+    sid = make_session(system="alien-evolved")
+    build = json.dumps({"name": "Crew", "attributes": dict(strength=3, agility=3, wits=4, empathy=4)})
+    cid = json.loads(alien_character_import(sid, "crew", build, "import", 0))["character_id"]
+    for read in (character_get_attr, character_get_items, character_get_abilities):
+        assert "Use alien_character_view" in read(cid)
+    assert json.loads(alien_character_view(sid, "crew"))["actor"]["name"] == "Crew"
+    missing = alien_character_view(sid, "missing")
+    foreign = make_session(system="alien-evolved")
+    assert missing == alien_character_view(foreign, "crew") == "ERROR: Actor not found or not public"
+    assert json.loads(alien_scene_status(sid))["revision"] == 1

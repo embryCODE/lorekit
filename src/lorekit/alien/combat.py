@@ -253,8 +253,7 @@ def finish(state, result, bundle, rng, *, reactions=True):
             bid
             for bid, bodyguard in sorted(state["actors"].items())
             if bid not in (attack["actor"], attack["target"])
-            and not bodyguard["dead"]
-            and bodyguard["health"] > 0
+            and not incapacitated(bodyguard)
             and bodyguard["zone"] == target["zone"]
             and any(e["hook"] == "bodyguard" for e in talents(bodyguard, bundle))
         ]

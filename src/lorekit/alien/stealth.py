@@ -95,7 +95,7 @@ def act(state, intent, bundle, rng):
             enemies = [
                 bid
                 for bid, other in sorted(state["actors"].items())
-                if other["kind"] != a["kind"] and not other["dead"] and scenes.line_of_sight(state, aid, bid)
+                if other["side"] != a["side"] and not other["dead"] and scenes.line_of_sight(state, aid, bid)
             ]
             if enemies:
                 scene["acted"].append(aid)
@@ -140,12 +140,12 @@ def act(state, intent, bundle, rng):
         if action != "guard":
             actor(state, member).pop("guarding", None)
         scene["acted"].append(member)
-    # Same-kind groups are treated as friendlies unless GM declares otherwise.
+    # Allegiance is independent of who controls the character.
     enemies = [
         bid
         for bid, b in state["actors"].items()
         if bid not in group
-        and b["kind"] != a["kind"]
+        and b["side"] != a["side"]
         and not b["dead"]
         and any(scenes.line_of_sight(state, member, bid) for member in group)
     ]
@@ -231,8 +231,8 @@ def tracker(state, intent, bundle, rng):
     if a.get("tracker_stretch") == state["clocks"]["stretch"]:
         raise LoreKitError("Tracker already used this stretch")
     instance, definition = survival.item(a, intent.get("item"), bundle)
-    if definition.get("tracker_range") is None:
-        raise LoreKitError("Item is not a motion tracker")
+    if definition.get("tracker_range") is None or instance.get("dropped"):
+        raise LoreKitError("Choose an available motion tracker")
     rolled = survival.supply(a, instance["id"], bundle, rng)
     a["tracker_stretch"] = state["clocks"]["stretch"]
     pings = []
@@ -289,7 +289,7 @@ def search_decide(state, intent, bundle, rng):
             state["scene"]["objects"][identifier]["found"] = True
     aid = p["actor"]
     state["pending"] = None
-    enemies = [tid for tid in revealed if actor(state, tid)["kind"] != actor(state, aid)["kind"]]
+    enemies = [tid for tid in revealed if actor(state, tid)["side"] != actor(state, aid)["side"]]
     event = {"type": "search_discoveries", "actor": aid, "found": chosen}
     if enemies:
         event["combat"] = scenes.enter_combat(state, {"actors": [aid] + enemies}, bundle, rng)

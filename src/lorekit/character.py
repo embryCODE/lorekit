@@ -129,8 +129,14 @@ def view(db, character_id: int) -> str:
         state = load(db, row[1])["state"]
         aid = next((aid for aid, a in state["actors"].items() if a.get("character_id") == character_id), None)
         projected = projection(state)["actors"].get(aid, {})
-        return json.dumps({"profile": state["profile"], "character": projected,
-                           "note": "Use alien_scene_status audience=gm for private mechanics"}, sort_keys=True)
+        return json.dumps(
+            {
+                "profile": state["profile"],
+                "character": projected,
+                "note": "Use alien_scene_status audience=gm for private mechanics",
+            },
+            sort_keys=True,
+        )
     lines = [
         f"ID: {row[0]}",
         f"SESSION: {row[1]}",
@@ -310,7 +316,19 @@ def cmd_set_attr(db, args):
     return set_attr(db, int(cid), p["category"], p["key"], p["value"])
 
 
+def _reject_alien_legacy_read(db, character_id):
+    from lorekit.backends import session_backend
+    from lorekit.queries import get_character_session_id
+
+    backend = session_backend(db, get_character_session_id(db, character_id))
+    if backend and backend.name == "alien":
+        raise LoreKitError(
+            "Use alien_character_view or alien_scene_status for canonical Alien mechanics; select the audience explicitly"
+        )
+
+
 def get_attr(db, character_id: int, category: str = "") -> str:
+    _reject_alien_legacy_read(db, character_id)
     if category:
         cur = db.execute(
             "SELECT key, value FROM character_attributes WHERE character_id = ? AND category = ? ORDER BY key",
@@ -365,6 +383,7 @@ def cmd_set_item(db, args):
 
 
 def get_items(db, character_id: int) -> str:
+    _reject_alien_legacy_read(db, character_id)
     cur = db.execute(
         "SELECT id, name, description, quantity, equipped FROM character_inventory "
         "WHERE character_id = ? ORDER BY name",
@@ -441,6 +460,7 @@ def remove_ability(db, character_id: int, name: str) -> str:
 
 
 def get_abilities(db, character_id: int) -> str:
+    _reject_alien_legacy_read(db, character_id)
     cur = db.execute(
         "SELECT id, name, category, uses, description FROM character_abilities "
         "WHERE character_id = ? ORDER BY category, name",

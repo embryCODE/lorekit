@@ -52,6 +52,9 @@ def tick(state, target_id, bundle, rng):
     events = []
     remaining = []
     for effect in a.get("acid", []):
+        if a["dead"]:
+            remaining = []
+            break
         if effect["due"] > state["clocks"]["round"]:
             remaining.append(effect)
             continue

@@ -53,3 +53,29 @@ def test_npc_cannot_move_before_pc_phase():
     s, b = setup()
     with pytest.raises(LoreKitError, match="phase"):
         stealth.act(s, {"actor": "npc", "action": "move", "zone": "a"}, b, random.Random(1))
+
+
+def test_stealth_allegiance_is_independent_of_pc_npc_control():
+    s, b = setup()
+    s["actors"]["npc"]["side"] = "crew"
+    out = stealth.act(s, {"actor": "pc", "action": "wait"}, b, random.Random(1))
+    assert out["type"] == "stealth_action"
+    assert s["pending"] is None and s["combat"] is None
+
+    s, b = setup()
+    s["actors"]["pc"]["kind"] = "npc"
+    s["scene"]["phase"] = "npc"
+    out = stealth.act(s, {"actor": "pc", "action": "wait"}, b, random.Random(1))
+    assert out["type"] in ("detection", "combat_started")
+    assert s["pending"] is not None or s["combat"] is not None
+
+
+def test_dropped_tracker_cannot_be_used_remotely_or_spend_power():
+    s, b = setup()
+    b["collections"]["items"] = {"tracker": {"weight": 1, "tracker_range": 2, "capacity": 3, "supply_type": "power"}}
+    a = s["actors"]["pc"]
+    entry = {"id": "tracker", "content_id": "tracker", "quantity": 1, "supply": 3, "dropped": True, "ground_zone": "b"}
+    a["inventory"].append(entry)
+    with pytest.raises(LoreKitError, match="available motion tracker"):
+        stealth.tracker(s, {"actor": "pc", "item": "tracker"}, b, random.Random(1))
+    assert entry["supply"] == 3 and "tracker_stretch" not in a

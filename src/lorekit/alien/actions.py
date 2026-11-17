@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from lorekit.alien import checks, scenes, survival
+from lorekit.alien.characters import incapacitated
 from lorekit.alien.state import actor
 from lorekit.db import LoreKitError
 
@@ -116,7 +117,7 @@ def act(state, intent, bundle, rng):
         )
     elif action in ("block", "unblock", "allow_pass"):
         edge = scenes.border(state, a["zone"], intent.get("zone"))
-        if not edge or a["health"] == 0 or a["dead"]:
+        if not edge or incapacitated(a):
             raise LoreKitError("Only an active character at a mapped passage can block it")
         blockers = edge.setdefault("blockers", [])
         if action == "block":
@@ -185,7 +186,9 @@ def act(state, intent, bundle, rng):
         target_id = intent.get("target")
         target = actor(state, target_id)
         if scenes.range_band(state, aid, target_id) != 0 or not (
-            target["health"] == 0 or target.get("unconscious") or target.get("immobilized_by") or target.get("shutdown")
+            incapacitated(target)
+            or target.get("immobilized_by")
+            or any(e["hook"] == "immobile" for injury in target["injuries"] for e in injury["effects"])
         ):
             raise LoreKitError("Drag a broken or immobilized person at Adjacent range")
         if not scenes.traversable(scenes.border(state, a["zone"], intent.get("zone"))):

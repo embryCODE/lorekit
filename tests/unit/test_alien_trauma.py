@@ -103,3 +103,32 @@ def test_personality_keeps_body_and_skill_state_and_both_resolve_penalties():
     effects.stress(a, 1)
     assert a["name"] == "Crew" and a["resolve"] == -1
     assert a["attributes"]["strength"] == 3 and a["health_max"] == 3
+
+
+def test_violent_trauma_maps_eight_plus_to_named_frenzy_eleven():
+    s, b = setup()
+    trauma.apply(s, "crew", {"id": "violent-example", "effects": [{"hook": "trauma_trait", "trait": "violent"}]})
+    a = s["actors"]["crew"]
+    a["stress"] = a["resolve"] + 7
+    out = effects.panic(s, "crew", random.Random(1), rolled=1)
+    assert out["result"] == 11
+    assert s["pending"]["result"] == 11
+    assert a["panic_responses"] == [11]
+
+
+def test_replacement_trauma_threshold_two_is_independent_of_normal_nine():
+    s, b = setup()
+    s["options"]["mental_trauma"] = True
+    a = s["actors"]["crew"]
+    a["highest_panic"] = 8
+    assert (
+        trauma.start(s, {"actor": "crew", "chapter": "ordinary"}, b, random.Random(1))["type"] == "trauma_not_triggered"
+    )
+    trauma.apply(s, "crew", {"id": "threshold-example", "effects": [{"hook": "trauma_threshold", "value": 2}]})
+    a["highest_panic"] = 1
+    assert trauma.start(s, {"actor": "crew", "chapter": "below"}, b, random.Random(1))["type"] == "trauma_not_triggered"
+    a["highest_panic"] = 2
+    out = trauma.start(s, {"actor": "crew", "chapter": "threshold"}, b, random.Random(1))
+    assert out["type"] == "check_complete"
+    assert out["continuation"]["kind"] == "trauma"
+    assert out["checks"][0]["attribute_only"]

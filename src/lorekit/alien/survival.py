@@ -6,7 +6,7 @@ import copy
 import re
 
 from lorekit.alien import effects
-from lorekit.alien.characters import talents
+from lorekit.alien.characters import incapacitated, talents
 from lorekit.alien.state import actor, integer
 from lorekit.db import LoreKitError
 
@@ -344,6 +344,8 @@ def due_events(state, unit):
             if hazard["unit"] == unit and hazard["due"] <= now:
                 state["queue"].append({"type": "due", "kind": "hazard", "actor": aid, "hazard": hazard["id"]})
                 hazard["due"] = now + 1
+        if unit == "stretch" and a["species"] == "human" and a["health"] == 0:
+            state["queue"].append({"type": "due", "kind": "natural_recovery", "actor": aid})
 
 
 def due(state, entry, bundle, rng):
@@ -352,6 +354,17 @@ def due(state, entry, bundle, rng):
     a = actor(state, entry["actor"])
     if a["dead"]:
         return {"type": "due_skipped", "actor": entry["actor"]}
+    if entry["kind"] == "natural_recovery":
+        recovered = (
+            a["species"] == "human"
+            and a["health"] == 0
+            and not a["fatigued"]
+            and not a.get("hotspot")
+            and a.get("facehug", {}).get("stage") != "attached"
+        )
+        if recovered:
+            restore(a, 1)
+        return {"type": "natural_recovery", "actor": entry["actor"], "recovered": recovered, "health": a["health"]}
     if entry["kind"] == "stun_recovery":
         return checks.start(
             state,
@@ -402,7 +415,7 @@ def due(state, entry, bundle, rng):
         care = a.get("disease_care")
         if hazard["kind"] == "disease" and care:
             helper = actor(state, care["actor"])
-            if not helper["dead"] and helper["health"] > 0 and helper["zone"] == a["zone"]:
+            if not incapacitated(helper) and helper["zone"] == a["zone"]:
                 spec.update(actor=care["actor"], skill="medical_aid", gear=care["gear"], context="disease")
         if hazard["kind"] == "vacuum":
             effects.stress(a, 1)

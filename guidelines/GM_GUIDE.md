@@ -1000,6 +1000,10 @@ different outcomes. Completed procedure time must be confirmed; advance elapsed
 clocks separately rather than charging it twice. Nursing/surgery/repair share a
 per-helper completed-shift budget. Hypersleep fatigue requires an awake shift
 and a meal. Synthetics recover by repair rather than human rest.
+A broken living human automatically recovers 1 Health after a completed stretch,
+after due injury/hazard events, without stabilizing critical injuries. Fatigue,
+radiation hotspots and an attached Facehugger prevent this recovery; ordinary
+safe rest does not grant a second recovery for the same broken state.
 
 `alien_time_advance` advances one explicit round/stretch/shift/day, then resolves
 due work. Never also advance a combat round after `end_turn`. Hazard cadence,

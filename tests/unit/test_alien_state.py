@@ -344,3 +344,16 @@ def test_snapshot_tampering_fails_before_next_mutation(make_session):
         0
     ] == canonical(record)
     db.close()
+
+
+def test_broken_self_recovery_time_retry_and_replay(make_session):
+    sid = make_session(system="alien-evolved")
+    db = require_db()
+    apply(db, sid, {"op": "character_import", "actor": "tech", "build": spec(health=0)}, "import-broken")
+    advanced = execute(db, sid, {"op": "time_advance", "unit": "stretch", "amount": 1}, "elapsed", 1, 5)
+    state = load(db, sid)["state"]
+    assert state["actors"]["tech"]["health"] == 1
+    assert execute(db, sid, {"op": "time_advance", "unit": "stretch", "amount": 1}, "elapsed", 1, 5) == advanced
+    assert load(db, sid)["state"] == state
+    verify(load(db, sid))
+    db.close()

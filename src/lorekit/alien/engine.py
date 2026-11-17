@@ -401,7 +401,9 @@ def transition(state: dict, intent: dict, rng) -> dict:
     if op == "hazard_remedy":
         return survival.remedy(state, intent)
     if op == "supply":
-        return survival.supply(actor(state, intent.get("actor")), intent.get("item"), bundle, rng)
+        result = survival.supply(actor(state, intent.get("actor")), intent.get("item"), bundle, rng)
+        survival.sync_air(state, intent["actor"])
+        return result
     if op == "damage":
         events = survival.damage(state, intent.get("actor"), intent.get("amount"), bundle, rng)
         events.extend(effects.drain(state, rng, bundle=bundle))

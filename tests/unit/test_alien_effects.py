@@ -193,3 +193,24 @@ def test_first_sight_is_deduplicated_and_revelation_stresses_observers():
     assert not s["actors"]["cover"]["secret_identity"]
     assert s["actors"]["a"]["stress"] == s["actors"]["b"]["stress"] == 1
     assert s["actors"]["cover"]["stress"] == 0
+
+
+def test_frenzy_zero_g_approach_resumes_attack_after_successful_mobility():
+    from lorekit.alien import checks, decisions
+    from lorekit.alien.engine import complete_check
+
+    s = state()
+    s["scene"]["zones"]["room"]["zero_g"] = True
+    scenes.start_combat(s, {"actors": ["a", "b"], "surprise": ["a"]}, random.Random(1))
+    s["actors"]["a"]["panic_responses"] = [11]
+    s["pending"] = {"type": "panic_choice", "actor": "a", "result": 11}
+    bundle = {"collections": {}}
+    decisions.panic(s, {"actor": "a", "target": "b", "approach": True}, bundle, Die(6))
+    pending = s["pending"]
+    assert pending["continuation"]["approach"] == "b"
+    assert scenes.range_band(s, "a", "b") == 1
+    result = checks.decide(s, {"actor": "a", "decision_id": pending["id"], "choice": "accept"}, bundle, Die(6))
+    out = complete_check(s, result, bundle, Die(6))
+    assert out["type"] == "defense_required"
+    assert scenes.range_band(s, "a", "b") == 0
+    assert s["combat"]["budgets"]["a"]["quick"] == 1

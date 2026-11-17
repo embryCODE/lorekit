@@ -24,6 +24,7 @@ def panic(state, intent, bundle, rng):
             actor(state, aid)["alerted"] = True
     elif result == 3:
         event["supply"] = survival.supply(a, intent.get("item"), bundle, rng)
+        survival.sync_air(state, p["actor"])
     elif result == 4:
         entry, _ = survival.item(a, intent.get("item"), bundle)
         entry["dropped"] = True

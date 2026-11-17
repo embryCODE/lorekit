@@ -285,6 +285,7 @@ def validate(bundle: dict) -> dict:
                 for modifier in modifiers:
                     if (
                         not isinstance(modifier, dict)
+                        or set(modifier) - {"skill", "context", "value"}
                         or modifier.get("skill") not in SKILLS
                         or type(modifier.get("value")) is not int
                         or not isinstance(modifier.get("context"), str)
@@ -385,7 +386,9 @@ def validate(bundle: dict) -> dict:
                 if not isinstance(attacks, dict) or set(attacks) != {str(i) for i in range(1, 7)}:
                     raise LoreKitError("Creature requires all six signature results")
                 for attack in attacks.values():
-                    if not isinstance(attack, dict) or not isinstance(attack.get("id"), str) or not attack.get("id"):
+                    if not isinstance(attack, dict) or set(attack) - {"id", "actions"}:
+                        raise LoreKitError("Unsupported signature attack property")
+                    if not isinstance(attack.get("id"), str) or not attack.get("id"):
                         raise LoreKitError("Each signature needs a stable attack ID")
                     if not isinstance(attack.get("actions"), list) or not attack["actions"]:
                         raise LoreKitError("Each signature needs implemented actions")

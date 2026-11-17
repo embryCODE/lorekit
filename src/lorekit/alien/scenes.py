@@ -6,7 +6,7 @@ import copy
 from collections import deque
 
 from lorekit.alien import effects
-from lorekit.alien.characters import load_weight, talents
+from lorekit.alien.characters import incapacitated, load_weight, talents
 from lorekit.alien.state import actor, integer
 from lorekit.db import LoreKitError
 
@@ -474,9 +474,7 @@ def end_turn(state, aid, rng, bundle=None):
             visible = [
                 tid
                 for tid in a["overkill"]
-                if not actor(state, tid)["dead"]
-                and actor(state, tid)["health"] > 0
-                and line_of_sight(state, current, tid)
+                if not incapacitated(actor(state, tid)) and line_of_sight(state, current, tid)
             ]
             if visible and not a.get("overkill_attacked"):
                 raise LoreKitError("Overkill requires attacking a visible enemy before ending the turn")
@@ -570,7 +568,7 @@ def route(state, aid, destination):
         raise LoreKitError("No traversable border to destination")
     for bid in edge.get("blockers", []):
         blocker = actor(state, bid)
-        if bid != aid and not blocker["dead"] and blocker["health"] > 0 and bid not in a.get("passed", []):
+        if bid != aid and not incapacitated(blocker) and bid not in a.get("passed", []):
             raise LoreKitError("A character blocks this passage; pass them with a special attack or permission")
     source = a["zone"]
     if state["scene"]["zones"][source].get("crawlspace"):

@@ -69,3 +69,25 @@ def test_hypersleep_relief_preserves_other_fatigue_sources():
     )
     actions.act(s, {"actor": "a", "action": "consume", "item": "hypersleep_relief"}, b, random.Random(1))
     assert a["fatigued"] and [h["id"] for h in a["hazards"]] == ["hunger"]
+
+
+@pytest.mark.parametrize("cost", [None, "quick", "full"])
+def test_gm_dose_cost_is_explicit_and_unknown_drug_effects_reject(cost):
+    from lorekit.alien import content, scenes
+
+    s, b = setup()
+    scenes.setup(s, {"zones": {"room": {}}, "placements": {"a": "room"}})
+    scenes.start_combat(s, {"actors": ["a"]}, random.Random(1))
+    intent = {"actor": "a", "action": "consume", "item": "stress_zero"}
+    if cost is not None:
+        intent["cost"] = cost
+    actions.act(s, intent, b, random.Random(1))
+    assert s["combat"]["budgets"]["a"] == {"full": cost == "full", "quick": 0 if cost == "full" else 1}
+    with pytest.raises(LoreKitError, match="Unsupported consumption"):
+        content.validate(
+            {
+                "profile": "evolved-beta2",
+                "source": "Original unsupported fixture",
+                "collections": {"items": {"unknown": {"page": 1, "weight": 0, "consume": "invented_stroke_table"}}},
+            }
+        )

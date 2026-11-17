@@ -49,3 +49,18 @@ def test_upper_floor_corrosion_continues_after_absorbed_hit():
     assert state["scene"]["zones"]["deck"]["floor_armor"] == 0
     state["clocks"]["round"] += 1
     assert acid.tick_floors(state, Sixes())[0]["breached"]
+
+
+def test_multiple_acid_effects_stop_when_the_first_kills_the_actor():
+    from lorekit.alien.characters import build
+    from lorekit.alien.state import initial
+
+    s = initial()
+    b = {"collections": {}}
+    a = s["actors"]["crew"] = build(
+        {"name": "Crew", "attributes": dict(strength=3, agility=3, wits=3, empathy=3)}, b, imported=True
+    )
+    a["acid"] = [{"dice": 6, "due": 0}, {"dice": 6, "due": 0}]
+    events = acid.tick(s, "crew", b, AllSixes())
+    assert a["dead"] and a["acid"] == []
+    assert len(events) == 1

@@ -70,3 +70,31 @@ def test_unknown_hook_rejected_before_install():
     value["collections"]["items"]["test-meter"]["effects"] = [{"hook": "arbitrary-code"}]
     with pytest.raises(LoreKitError, match="Unsupported"):
         content.install(value)
+
+
+@pytest.mark.parametrize("family", ["signature", "modifier"])
+def test_unknown_nested_content_properties_reject_atomically(make_session, family):
+    value = bundle()
+    if family == "signature":
+        value["collections"]["creatures"] = {
+            "example": {
+                "page": 1,
+                "health": 2,
+                "speed": 1,
+                "skills": {},
+                "attacks": {str(i): {"id": str(i), "actions": [{"hook": "stress", "value": 1}]} for i in range(1, 7)},
+            }
+        }
+        value["collections"]["creatures"]["example"]["attacks"]["1"]["teleport"] = True
+    else:
+        value["collections"]["items"]["test-meter"]["check_modifiers"] = [
+            {"skill": "comtech", "context": "repair", "value": 1, "teleport": True}
+        ]
+    sid = make_session(system="alien-evolved")
+    db = require_db()
+    before = load(db, sid)
+    with pytest.raises(LoreKitError, match="Unsupported|Invalid"):
+        content.install(value)
+    assert load(db, sid) == before
+    assert not content.directory().exists() or not list(content.directory().glob("*.json"))
+    db.close()

@@ -71,6 +71,9 @@ def resolve(state, result, bundle, rng):
     if incapacitated(actor(state, plan["actor"])):
         return {"type": "panic_movement_aborted", "actor": plan["actor"]}
     if result["success"]:
+        if result["continuation"].get("approach"):
+            scenes.approach(state, plan["actor"], result["continuation"]["approach"], bundle, paid=True)
+            return finish(state, plan, bundle, rng)
         scenes.move(
             state, plan["actor"], result["continuation"]["zone"], bundle, forced=True, rng=rng, zero_g_checked=True
         )
@@ -135,7 +138,7 @@ def finish(state, plan, bundle, rng):
                     "actor": aid,
                     "skill": "mobility",
                     "_zero_g_move": True,
-                    "continuation": {"kind": "forced_move", "plan": copy.deepcopy(plan), "zone": None},
+                    "continuation": {"kind": "forced_move", "plan": copy.deepcopy(plan), "approach": target},
                 },
                 bundle,
                 rng,
