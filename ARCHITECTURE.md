@@ -124,12 +124,38 @@ search (does not block the HTTP server or clients).
 ### Rules Backends (`backends/`)
 
 A session's `system_type` selects who resolves its rules. Systems with an entry
-in `backends.BACKENDS` (today `dnd55e` → Nat20) use external-engine tools
-(`dnd_*`); all others use cruncher and the pack-driven tools. The
-`@cruncher_only` / `@backend_only` decorators guard each tool: a tool called on
-the wrong kind of session returns an error naming the right tool family and
-changes nothing. The registry knows nothing about d20 rolls or grids, so a
-dice-pool engine can register beside Nat20.
+in `backends.BACKENDS` (`dnd55e` → Nat20 and `alien-evolved` → Alien) use
+system-specific tools (`dnd_*` / `alien_*`); other systems use cruncher and
+pack-driven tools. `system_only` checks the concrete system of every referenced
+session and character. `backend_only` retains its D&D-specific contract; sharing
+a registry entry does not make Alien a D&D session. Cross-system or missing
+references reject before mutation.
+
+
+**Alien Beta 2 state (`alien/`).** The pure command router resolves checks,
+scenes, personal combat, survival, talents and data-driven creature scripts.
+`state.execute` commits a versioned canonical snapshot plus append-only audit
+under `session_meta["alien_evolved_state"]` in one SQLite transaction. Every
+mutation records request identity, expected revision, seed, local content hash,
+concrete intent and resulting digest. A matching retry returns its original
+result; conflicting reuse or stale revisions reject. SQL character identities
+for imports and spawned creatures are allocated in that same transaction.
+Caller-owned transactions are not committed by the backend.
+
+Pending checks, defenses, initiative draws, reactions, search choices, pressure
+checks and queued continuations are ordinary snapshot data. They survive process
+restart and existing checkpoint/save/revert/branch operations. `state.verify`
+replays the complete audit and checks every result and digest. Local content is
+immutable, schema-validated and addressed by SHA-256; missing or changed content
+fails closed. Content files and the source PDF are not included in exported saves.
+
+All Alien mutation results are labeled GM-only. Public views use an allowlist;
+hidden NPC locations, secret synthetic mechanics, private agendas, raw dice,
+queues and audit entries are absent. Raw exports remain explicitly GM-only.
+Generic character/rules writers and reserved session metadata cannot bypass
+Alien state. Unsupported commands, fields and content hooks reject; exceptional
+GM overrides require a recorded reason. See `docs/alien-content.md` for the local
+bundle contract and the GM guide for tool sequencing.
 
 **Nat20 combat log (`backends/nat20.py`).** Nat20 keeps live combats in
 process memory with no save/restore, so LoreKit stores each combat as an

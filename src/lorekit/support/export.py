@@ -56,6 +56,16 @@ def dump(db, session_id: int) -> str:
 
     parts = []
 
+    if session[3] == "alien-evolved":
+        import json
+
+        from lorekit.alien.state import load
+
+        record = load(db, session_id)
+        parts.append("GM-ONLY EXPORT: contains private Alien mechanics and narrative information.")
+        parts.append("Local content is excluded; restore the matching content hash separately.")
+        parts.append(json.dumps(record, sort_keys=True))
+
     # -- 1. Session --
     parts.append(_section("SESSION"))
     parts.append(f"Name: {session[1]}")

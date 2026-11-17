@@ -76,7 +76,8 @@ player's answer before moving on.
 3. **Ask the player to choose a rule system.**
    Every session requires a system. Available: `dnd55e` (D&D 5.5e, 2024 rules,
    SRD 5.2.1 — resolved by the Nat20 engine; **read Section 12 before using
-   it**), and the cruncher packs `mm3e` (d20 Hero SRD 3e), `pf2e` (Pathfinder
+   it**), `alien-evolved` (experimental Evolved Edition Beta 2; **read Section 13**),
+   and the cruncher packs `mm3e` (d20 Hero SRD 3e), `pf2e` (Pathfinder
    2e), `basic` (generic d20). If the player
    picks a system that has no pack, tell them it is not supported and offer
    `basic` as an alternative.
@@ -911,3 +912,109 @@ Dice, and reduces exhaustion by 1. Call it once per resting character.
 
 Keep the mechanics in short, plain lines the player can skim (what was rolled
 and the outcome) and put the drama in your narration.
+
+
+## 13. Alien Evolved Beta 2 sessions (`alien-evolved`)
+
+Use `session_setup(..., system="alien-evolved")`, then the `alien_*` family.
+This profile implements the supplied **Evolved Edition Beta 2** source; it does
+not claim final-edition compatibility. Never substitute first-edition panic,
+armor or critical-injury rules. Vehicles, ships, campaign advancement, random
+life paths, remaining species and Last Survivor are outside this profile.
+Consult the active coverage checklist before advertising an unverified feature.
+
+### Local content and characters
+
+Import a validated local bundle through `alien_content_import` before creating
+actors. The PDF, extracted text and proprietary catalog stay local. The session
+remembers the exact bundle digest; moving a save requires the matching local
+bundle. See [the schema and content boundary](../docs/alien-content.md). An
+unsupported talent or gear feature must produce an error, not a guessed bonus.
+
+Use `alien_character_create` for standard point-buy with local career choices;
+use `alien_character_import` for final pregenerated values and
+`alien_creature_import` for a validated local creature template. Narrative
+`private` fields hold agendas, buddies/rivals, signature items and other secrets.
+A secret synthetic uses `secret_identity:true`. `side` records crew/allegiance
+without changing PC/NPC behavior. Equip air supplies explicitly and mark only the
+one in active use with `active_air:true`.
+
+### Revisions, decisions and narration
+
+Read `alien_scene_status(..., audience="gm")` for authoritative mechanics.
+Every mutation needs a unique `request_id` and the latest `expected_revision`.
+Reuse the same ID and arguments only to retry the same request. After an error,
+read current state before continuing; a rejected command changes no state.
+Do not narrate success until the backend resolves the action.
+
+Follow the returned `pending.type`. Checks use `alien_check_decide` with the
+check ID and `accept`, `push`, or `story_point`. Attack targets declare a defense
+or dodge before any attack dice. Area attacks collect secondary defenses too.
+Initiative talents, panic, signature choices, special attacks, Bodyguard, Lucky,
+Overkill and other reactions use the corresponding decision operation in
+`alien_combat_act`. Analysis questions and discovered weaknesses use
+`alien_talent` with a recorded GM answer. Generic checks expose an extra-success
+budget; `alien_check_benefits` records narrative benefits without double-spending
+combat successes. Resolve pending choices and `queue_continue` before unrelated
+actions. A suspended response queue retains the remaining work.
+
+A character can `hold_off` before `begin_turn`. Beginning a turn resolves its
+stun, panic, egg-disturbance and wounded-creature effects. An ordinary action can
+also initiate those effects, suspending itself until they finish; incapacitation
+can cancel that action. Spent interrupts remain spent after an initiative swap.
+Use `end_turn` to finish the current slot; combat rounds advance there. Newly
+encountered participants join an existing fight next round under ruling B18.
+
+Use the **public** projection for narration. GM mutation output and raw exports
+contain secrets and must not be pasted into player-visible messages, journals or
+turn narration. Public state omits hidden positions, secret mechanics, agendas,
+raw rolls and queued decisions. A deliberate synthetic revelation goes through
+`alien_horror`; it changes public facts and applies the associated stress.
+
+### Scenes, time and recovery
+
+`alien_scene_setup` defines zones, borders, positions and explicit sight lines.
+An unlocked door can be passed during movement; sealed access points block it.
+Crawlspaces require occupant order and border `ends` (`head`/`tail`); a mapped
+capacity enforces the GM's space judgment. Passage blocking and permission,
+door locks/hacks/breaks, dragging, equipment, reloads and suit entry use personal
+`action` operations. Hidden objects are discovered through search choices rather
+than arbitrary automatic reveal order.
+
+Use `alien_stealth_act` for the PC-first/NPC-second sequence, hidden interactions,
+searches and trackers. A tracker rolls power before returning anonymous pings of
+previous-stretch motion. Escaped actors can return to stealth while others fight;
+advancing a whole stealth stretch during combat requires `elapsed:true`.
+`scene_mode` explicitly switches social/stealth mode outside combat.
+
+Use `alien_horror` for first sight, Adjacent terror and other concrete triggers;
+`alien_stress` and `alien_panic` also require a reason. Mental trauma is an opt-in
+session option, requires a complete local table and is checked once per named
+completed play session. Phobias, nightmares and hallucinations need explicit GM
+trigger events; amnesia is a roleplay condition. Retain the documented Beta 2
+rulings for the trauma table's stale references.
+
+`alien_recover` covers first aid, rally, safe rest, surgery, repairs, disease care
+and shutdown-synthetic communication. Stabilization and restored Health are
+different outcomes. Completed procedure time must be confirmed; advance elapsed
+clocks separately rather than charging it twice. Nursing/surgery/repair share a
+per-helper completed-shift budget. Hypersleep fatigue requires an awake shift
+and a meal. Synthetics recover by repair rather than human rest.
+A broken living human automatically recovers 1 Health after a completed stretch,
+after due injury/hazard events, without stabilizing critical injuries. Fatigue,
+radiation hotspots and an attached Facehugger prevent this recovery; ordinary
+safe rest does not grant a second recovery for the same broken state.
+
+`alien_time_advance` advances one explicit round/stretch/shift/day, then resolves
+due work. Never also advance a combat round after `end_turn`. Hazard cadence,
+lethal deadlines, infection and healing persist across saves. `alien_environment`
+handles fire, falls, radiation, blasts, decompression, hull shots and countdowns;
+pressure checks precede actions in a venting zone or vacuum. Map outer/floor armor
+when relevant. Acid records raw damage, corrosion and Health damage separately;
+Mason's B17 ruling allows an absorbed initial hit to keep burning.
+
+If a rule or combination returns unsupported, explain the affected action.
+`alien_rules_override` is a limited, audited exception with a concrete reason;
+it is not evidence that the missing subsystem was automated. Use ordinary
+`turn_save`, `turn_revert`, `manual_save` and `save_load` for narrative checkpoints;
+they also preserve Alien pending decisions, clocks, queues and audit state.
