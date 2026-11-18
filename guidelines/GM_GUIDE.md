@@ -198,9 +198,12 @@ Save character state changes immediately -- damage, items, level ups. Use
 stored text is the **exact text you displayed to the player** -- identical,
 word for word. The purpose is to replay the scene verbatim on resume.
 
-Always write the narration out as your visible reply, in addition to passing it
-to `turn_save`. Never mention saving to the player ("(Saved.)", "I saved this
-scene"); players should only ever see the story and their choices.
+The `turn_save` narration is what the player sees as your reply; text you write
+around tool calls is not shown once a turn is saved. Put everything the player
+needs (dialogue, consequences, prompts) into that narration, and never follow it
+with a recap or summary of the same scene. Never mention saving to the player
+("(Saved.)", "I saved this scene"); players should only ever see the story and
+their choices.
 
 ### Reverting a turn
 
@@ -276,7 +279,9 @@ hierarchy (kingdom -> city -> district -> building).
 ### Introducing NPCs
 
 When you introduce a named NPC, create a complete character sheet using
-`character_build` with `type="npc"` and link them to the current region.
+`character_build` with `type="npc"` and link them to the current region. In an
+`alien-evolved` session, use `alien_character_import` (or
+`alien_creature_import`) instead; `character_build` is rejected there.
 
 **Always create complete NPC sheets.** At minimum: core attributes, key
 equipment, and defining abilities. Do not leave this for later.

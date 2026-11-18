@@ -25,7 +25,7 @@ async def test_narration_only_passed_to_turn_save_is_shown():
             StreamChunk(type="text", content="(Saved.)"),
         ]
     )
-    assert events == [GameEvent(type="narration", content="The road winds on.\n\n(Saved.)")]
+    assert events == [GameEvent(type="narration", content="The road winds on.")]
 
 
 @pytest.mark.asyncio
@@ -36,7 +36,33 @@ async def test_narration_already_shown_is_not_duplicated():
             StreamChunk(type="saved_narration", content="The road  winds on."),
         ]
     )
-    assert events == [GameEvent(type="narration", content="The road winds on.")]
+    assert events == [GameEvent(type="narration", content="The road  winds on.")]
+
+
+@pytest.mark.asyncio
+async def test_recap_and_interim_text_are_not_shown_alongside_saved_narration():
+    events = await _collect(
+        [
+            StreamChunk(type="text", content="Tuck has answered. Now the Captain."),
+            StreamChunk(type="tool_use", content="npc_interact"),
+            StreamChunk(type="saved_narration", content='Tuck rubs his eyes. "No idea, Grip."'),
+            StreamChunk(type="tool_use", content="turn_save"),
+            StreamChunk(type="text", content="Tuck says he doesn't know. What do you do?"),
+        ]
+    )
+    assert events == [GameEvent(type="narration", content='Tuck rubs his eyes. "No idea, Grip."')]
+
+
+@pytest.mark.asyncio
+async def test_text_blocks_split_by_tool_calls_keep_a_paragraph_break():
+    events = await _collect(
+        [
+            StreamChunk(type="text", content="You roll."),
+            StreamChunk(type="tool_use", content="roll_dice"),
+            StreamChunk(type="text", content="A 14."),
+        ]
+    )
+    assert events == [GameEvent(type="narration", content="You roll.\n\nA 14.")]
 
 
 @pytest.mark.asyncio
@@ -56,9 +82,7 @@ def test_parse_assistant_turn_save_narration():
         {
             "type": "assistant",
             "message": {
-                "content": [
-                    {"type": "tool_use", "name": "mcp__lorekit__turn_save", "input": {"narration": "A scene."}}
-                ]
+                "content": [{"type": "tool_use", "name": "mcp__lorekit__turn_save", "input": {"narration": "A scene."}}]
             },
         }
     )

@@ -21,7 +21,7 @@ async def _transform_events(
     debug: bool = False,
 ) -> AsyncIterator[GameEvent]:
     """Transform raw StreamChunks into curated GameEvents."""
-    text_parts: list[str] = []
+    segments: list[list[str]] = [[]]
     saved_narrations: list[str] = []
     result_text = ""
     got_any = False
@@ -29,7 +29,7 @@ async def _transform_events(
     async for chunk in chunks:
         got_any = True
         if chunk.type == "text":
-            text_parts.append(chunk.content)
+            segments[-1].append(chunk.content)
             if verbose:
                 yield GameEvent(type="narration_delta", content=chunk.content)
         elif chunk.type == "saved_narration":
@@ -37,6 +37,8 @@ async def _transform_events(
         elif chunk.type == "result_text":
             result_text = chunk.content
         elif chunk.type == "tool_use":
+            if segments[-1]:
+                segments.append([])
             if verbose:
                 yield GameEvent(type="tool_activity", content=chunk.content)
         elif chunk.type == "npc_tool_use":
@@ -48,15 +50,15 @@ async def _transform_events(
         elif chunk.type == "system":
             yield GameEvent(type="system", content=chunk.content)
 
-    # Emit accumulated narration at the end. Narration the GM only passed to
-    # turn_save (never as visible text) is shown too, so a reply is never lost.
-    shown = "".join(text_parts)
-    squashed = " ".join(shown.split())
-    missing = [n for n in saved_narrations if " ".join(n.split())[:80] not in squashed]
-    if not shown and not missing and result_text:
-        shown = result_text
-    if missing or shown:
-        yield GameEvent(type="narration", content="\n\n".join([*missing, shown] if shown else missing))
+    # The turn_save narration is the canonical reply. Free text around tool
+    # calls is often the GM thinking aloud or recapping what it saved, so
+    # showing both repeats the scene to the player.
+    if saved_narrations:
+        shown = "\n\n".join(saved_narrations)
+    else:
+        shown = "\n\n".join(t for t in ("".join(s).strip() for s in segments) if t) or result_text
+    if shown:
+        yield GameEvent(type="narration", content=shown)
     elif not got_any:
         yield GameEvent(type="error", content="GM agent process terminated unexpectedly")
     else:
