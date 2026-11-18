@@ -11,3 +11,7 @@ build/
 
 # Locally imported Alien reference content is not redistributable system data.
 /data/alien-content/
+
+# SQLite WAL sidecars
+*.db-shm
+*.db-wal
