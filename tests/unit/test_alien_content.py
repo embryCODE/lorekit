@@ -12,7 +12,7 @@ from lorekit.db import LoreKitError, require_db
 
 def bundle():
     return {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original test examples; no book catalog",
         "collections": {
             "talents": {"calibrated": {"page": 1, "effects": [{"hook": "resolve_bonus", "value": 1}]}},

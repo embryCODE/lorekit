@@ -13,7 +13,7 @@ from lorekit.db import LoreKitError
 def setup():
     s = initial()
     b = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original test table",
         "collections": {
             "traumas": {

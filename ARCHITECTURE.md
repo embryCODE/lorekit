@@ -132,7 +132,7 @@ a registry entry does not make Alien a D&D session. Cross-system or missing
 references reject before mutation.
 
 
-**Alien Beta 2 state (`alien/`).** The pure command router resolves checks,
+**Alien state (`alien/`).** The pure command router resolves checks,
 scenes, personal combat, survival, talents and data-driven creature scripts.
 `state.execute` commits a versioned canonical snapshot plus append-only audit
 under `session_meta["alien_evolved_state"]` in one SQLite transaction. Every

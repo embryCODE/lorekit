@@ -2,8 +2,7 @@
 
 Alien support is experimental and passed independent acceptance review for the
 scoped cinematic loop on 2026-11-17. The resolver identifies itself as
-`evolved-beta2`; deferred subsystems and final-edition reconciliation remain
-outside this profile.
+`evolved`; deferred subsystems remain outside this profile.
 
 Content is imported through `alien_content_import` before creating actors. The
 source PDF and its extracted text stay outside git. Bundles are canonical JSON,
@@ -17,7 +16,7 @@ bundle instead of silently replacing it.
 
 ```json
 {
-  "profile": "evolved-beta2",
+  "profile": "evolved",
   "source": "Your local reference title/version and source fingerprint",
   "collections": {
     "careers": {}, "talents": {}, "items": {},

@@ -17,7 +17,7 @@ def test_signature_uses_explicit_dice_and_only_one_action_per_speed_slot(make_se
         return result
 
     bundle = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original creature fixture",
         "collections": {
             "creatures": {
@@ -95,7 +95,7 @@ def test_egg_release_spawns_identity_and_immediate_attack_replays(make_session):
     sid = make_session(system="alien-evolved")
     db = require_db()
     bundle = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original egg fixture",
         "collections": {
             "creatures": {

@@ -1,4 +1,4 @@
-"""GM-only Alien Evolved Beta 2 mutations and audience-filtered read tools.
+"""GM-only Alien Evolved mutations and audience-filtered read tools.
 
 Every mutation needs a stable request ID and the latest expected revision.
 Use public status for narration; mutation results are explicitly GM-only.
@@ -103,12 +103,39 @@ def alien_check_decide(
 @mcp.tool()
 @alien_only
 def alien_content_import(session_id: int, bundle: str, request_id: str, expected_revision: int) -> str:
-    """GM-only: validate/install local evolved-beta2 content before actors are created. Never uploads the PDF."""
+    """GM-only: validate/install local evolved content before actors are created. Never uploads the PDF."""
     try:
         fingerprint = content.install(_object(bundle))
         return _mutate(session_id, {"op": "content_import", "hash": fingerprint}, request_id, expected_revision)
     except (LoreKitError, ValueError) as exc:
         return f"ERROR: {exc}"
+
+
+@mcp.tool()
+@alien_only
+def alien_content_catalog(session_id: int, family: str = "") -> str:
+    """Read the session's imported content IDs (careers, talents, items, ...). Careers list key attribute, key skills and talent options; family filters to one collection."""
+    db = require_db()
+    try:
+        collections = content.read(load(db, session_id)["state"]["content_hash"])["collections"]
+        if family:
+            if family not in content.COLLECTIONS:
+                raise LoreKitError(f"Unknown family; choose from {sorted(content.COLLECTIONS)}")
+            collections = {family: collections.get(family, {})}
+        return json.dumps(
+            {
+                name: {
+                    k: ({f: v[f] for f in ("attribute", "skills", "talents") if f in v} if name == "careers" else {})
+                    for k, v in entries.items()
+                }
+                for name, entries in collections.items()
+            },
+            sort_keys=True,
+        )
+    except LoreKitError as exc:
+        return f"ERROR: {exc}"
+    finally:
+        db.close()
 
 
 @mcp.tool()

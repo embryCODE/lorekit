@@ -19,7 +19,7 @@ def test_attack_declares_before_roll_and_replays(make_session):
         return out
 
     bundle = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original fixtures",
         "collections": {
             "injuries": {

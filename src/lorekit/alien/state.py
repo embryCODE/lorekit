@@ -15,7 +15,7 @@ import secrets
 from lorekit.db import LoreKitError
 
 SYSTEM = "alien-evolved"
-PROFILE = "evolved-beta2"
+PROFILE = "evolved"
 VERSION = 1
 KEY = "alien_evolved_state"
 

@@ -68,7 +68,7 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
         "armor",
     }
     if set(spec) - allowed:
-        raise LoreKitError("Unknown character build fields")
+        raise LoreKitError(f"Unknown character build fields {sorted(set(spec) - allowed)}; allowed: {sorted(allowed)}")
     if not isinstance(spec.get("name"), str) or not spec["name"].strip():
         raise LoreKitError("Character name is required")
     species = spec.get("species", "human")
@@ -77,11 +77,11 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
         raise LoreKitError("Unsupported actor species or kind")
     attrs = spec.get("attributes", {})
     if not isinstance(attrs, dict) or set(attrs) != set(ATTRIBUTES):
-        raise LoreKitError("Exactly four attributes are required")
+        raise LoreKitError(f"Exactly four attributes are required: {list(ATTRIBUTES)}; got {sorted(attrs) if isinstance(attrs, dict) else attrs!r}")
     attrs = {key: integer(value, key, 1, 8 if species == "synthetic" else 5) for key, value in attrs.items()}
     skills = spec.get("skills", {})
     if not isinstance(skills, dict) or set(skills) - set(SKILLS):
-        raise LoreKitError("Unknown skill")
+        raise LoreKitError(f"Unknown skill {sorted(set(skills) - set(SKILLS)) if isinstance(skills, dict) else skills!r}; valid IDs: {list(SKILLS)}")
     skills = {key: integer(skills.get(key, 0), key, 0, 5) for key in SKILLS}
     talent_ids = spec.get("talents", [])
     if not isinstance(talent_ids, list) or any(not isinstance(t, str) for t in talent_ids):
@@ -89,22 +89,22 @@ def build(spec: dict, bundle: dict, *, imported: bool = False) -> dict:
     talent_entries = bundle["collections"].get("talents", {})
     for tid in set(talent_ids):
         if tid not in talent_entries:
-            raise LoreKitError("Unsupported or missing talent")
+            raise LoreKitError(f"Unsupported or missing talent {tid!r}; imported talent IDs: {sorted(talent_entries)}")
         integer(talent_entries[tid].get("max_selections", 1), "max_selections", 1, 3)
         if talent_ids.count(tid) > talent_entries[tid].get("max_selections", 1):
             raise LoreKitError("Talent selection limit exceeded")
     if not imported:
         career = bundle["collections"].get("careers", {}).get(spec.get("career"))
         if career is None:
-            raise LoreKitError("Standard creation requires a local career entry")
+            raise LoreKitError(f"Standard creation requires a local career entry; got {spec.get('career')!r}, imported careers: {sorted(bundle['collections'].get('careers', {}))}")
         if sum(attrs.values()) != 14 or any(
             v < 2 or v > (5 if k == career["attribute"] else 4) for k, v in attrs.items()
         ):
-            raise LoreKitError("Invalid 14-point standard attribute allocation")
+            raise LoreKitError(f"Invalid 14-point standard attribute allocation: attributes must total 14, each 2-4, and the career key attribute '{career['attribute']}' may be 2-5; got total {sum(attrs.values())} {attrs}")
         if sum(skills.values()) != 10 or any(v > (3 if k in career["skills"] else 1) for k, v in skills.items()):
-            raise LoreKitError("Invalid 10-point standard skill allocation")
+            raise LoreKitError(f"Invalid 10-point standard skill allocation: skills must total 10, career key skills {career['skills']} max 3, all others max 1; got total {sum(skills.values())} {({k: v for k, v in skills.items() if v})}")
         if len(talent_ids) != 1 or talent_ids[0] not in career["talents"]:
-            raise LoreKitError("Choose exactly one career talent")
+            raise LoreKitError(f"Choose exactly one career talent, passed as \"talents\": [id]; options for {spec.get('career')!r}: {career['talents']}")
         if species == "synthetic":
             selected = spec.get("synthetic_bonuses", [])
             if (

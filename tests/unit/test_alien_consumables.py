@@ -86,7 +86,7 @@ def test_gm_dose_cost_is_explicit_and_unknown_drug_effects_reject(cost):
     with pytest.raises(LoreKitError, match="Unsupported consumption"):
         content.validate(
             {
-                "profile": "evolved-beta2",
+                "profile": "evolved",
                 "source": "Original unsupported fixture",
                 "collections": {"items": {"unknown": {"page": 1, "weight": 0, "consume": "invented_stroke_table"}}},
             }

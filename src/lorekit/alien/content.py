@@ -71,7 +71,7 @@ def validate(bundle: dict) -> dict:
     if not isinstance(bundle, dict) or set(bundle) != {"profile", "source", "collections"}:
         raise LoreKitError("Bundle requires exactly profile, source and collections")
     if bundle["profile"] != PROFILE or not isinstance(bundle["source"], str) or not bundle["source"].strip():
-        raise LoreKitError("Bundle requires evolved-beta2 profile and source provenance")
+        raise LoreKitError("Bundle requires evolved profile and source provenance")
     collections = bundle["collections"]
     if not isinstance(collections, dict) or not set(collections) <= COLLECTIONS:
         raise LoreKitError("Invalid bundle collections")

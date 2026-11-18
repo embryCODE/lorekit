@@ -208,7 +208,7 @@ def test_due_death_check_survives_restart_and_cannot_push(make_session):
     db = require_db()
     # Original complete numerical fixture whose every result has a shift deadline.
     bundle = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original fixtures",
         "collections": {
             "injuries": {
@@ -242,7 +242,7 @@ def test_round_injury_rolls_on_actors_turn_not_round_boundary(make_session):
     sid = make_session(system="alien-evolved")
     db = require_db()
     bundle = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original fixtures",
         "collections": {
             "injuries": {

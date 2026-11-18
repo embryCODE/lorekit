@@ -1,4 +1,4 @@
-"""User-selected Beta 2 acid ruling: armor-absorbed hits can continue."""
+"""User-selected acid ruling: armor-absorbed hits can continue."""
 
 from lorekit.alien import acid
 from lorekit.alien.characters import build

@@ -11,7 +11,7 @@ def test_company_resources_limits_and_analysis_answer_survive_replay(make_sessio
     sid = make_session(system="alien-evolved")
     db = require_db()
     bundle = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original talent fixtures",
         "collections": {
             "talents": {key: {"page": 1, "effects": [{"hook": key}]} for key in ("company_resources", "analysis")},
@@ -137,7 +137,7 @@ def test_initiative_choices_reserve_unique_cards_across_restart(make_session):
     sid = make_session(system="alien-evolved")
     db = require_db()
     b = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original initiative fixtures",
         "collections": {
             "talents": {key: {"page": 1, "effects": [{"hook": key}]} for key in ("fast_reflexes", "combat_veteran")}
@@ -310,7 +310,7 @@ def test_initiative_result_exposes_resumed_panic_not_a_stale_empty_pending(make_
     sid = make_session(system="alien-evolved")
     db = require_db()
     b = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original interrupted initiative fixture",
         "collections": {"talents": {"quick": {"page": 1, "effects": [{"hook": "fast_reflexes"}]}}},
     }

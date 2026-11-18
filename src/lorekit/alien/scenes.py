@@ -590,7 +590,7 @@ def route(state, aid, destination):
 def enter_combat(state, intent, bundle, rng):
     if state["combat"] is None:
         return start_combat(state, intent, rng, bundle)
-    # Beta 2 does not specify reinforcements' initiative. B18: join next round,
+    # The rulebook does not specify reinforcements' initiative. B18: join next round,
     # preserving all cards/action budgets already used in the current round.
     joined = []
     for aid in intent["actors"]:

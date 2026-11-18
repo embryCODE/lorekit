@@ -12,7 +12,7 @@ from lorekit.alien.state import initial
 
 def setup():
     bundle = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original test fixtures",
         "collections": {
             "injuries": {

@@ -1,4 +1,4 @@
-"""Alien stress responses and ordered panic consequences (Beta 2 pp. 44, 72–74)."""
+"""Alien stress responses and ordered panic consequences (pp. 44, 72–74)."""
 
 from __future__ import annotations
 

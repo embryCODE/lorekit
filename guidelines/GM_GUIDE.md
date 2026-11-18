@@ -76,7 +76,7 @@ player's answer before moving on.
 3. **Ask the player to choose a rule system.**
    Every session requires a system. Available: `dnd55e` (D&D 5.5e, 2024 rules,
    SRD 5.2.1 — resolved by the Nat20 engine; **read Section 12 before using
-   it**), `alien-evolved` (experimental Evolved Edition Beta 2; **read Section 13**),
+   it**), `alien-evolved` (experimental Evolved Edition; **read Section 13**),
    and the cruncher packs `mm3e` (d20 Hero SRD 3e), `pf2e` (Pathfinder
    2e), `basic` (generic d20). If the player
    picks a system that has no pack, tell them it is not supported and offer
@@ -914,11 +914,10 @@ Keep the mechanics in short, plain lines the player can skim (what was rolled
 and the outcome) and put the drama in your narration.
 
 
-## 13. Alien Evolved Beta 2 sessions (`alien-evolved`)
+## 13. Alien Evolved sessions (`alien-evolved`)
 
 Use `session_setup(..., system="alien-evolved")`, then the `alien_*` family.
-This profile implements the supplied **Evolved Edition Beta 2** source; it does
-not claim final-edition compatibility. Never substitute first-edition panic,
+This profile implements the supplied **Evolved Edition** source. Never substitute first-edition panic,
 armor or critical-injury rules. Vehicles, ships, campaign advancement, random
 life paths, remaining species and Last Survivor are outside this profile.
 Consult the active coverage checklist before advertising an unverified feature.
@@ -991,7 +990,7 @@ Use `alien_horror` for first sight, Adjacent terror and other concrete triggers;
 `alien_stress` and `alien_panic` also require a reason. Mental trauma is an opt-in
 session option, requires a complete local table and is checked once per named
 completed play session. Phobias, nightmares and hallucinations need explicit GM
-trigger events; amnesia is a roleplay condition. Retain the documented Beta 2
+trigger events; amnesia is a roleplay condition. Retain the documented
 rulings for the trauma table's stale references.
 
 `alien_recover` covers first aid, rally, safe rest, surgery, repairs, disease care

@@ -52,7 +52,7 @@ def test_cinematic_restarts_branches_and_recovers(make_session):
         raise AssertionError("Actor never receives a turn")
 
     b = {
-        "profile": "evolved-beta2",
+        "profile": "evolved",
         "source": "Original acceptance fixtures",
         "collections": {
             "items": {
